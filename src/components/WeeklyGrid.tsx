@@ -58,7 +58,7 @@ export function WeeklyGrid({
   const visibleTasks = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
     return tasks
-      .filter((task) => task.weekId === weekId && !task.deleted)
+      .filter((task) => task.weekId === weekId && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate))
       .filter((task) => categoryFilter === "all" || task.category === categoryFilter)
       .filter((task) => {
         if (!query) return true;
@@ -143,8 +143,8 @@ export function WeeklyGrid({
         </select>
       </div>
 
-      <div className="mt-5 overflow-x-auto pb-2">
-        <div className="grid min-w-[84rem] grid-cols-7 gap-3">
+      <div className="weekly-grid-scroll mt-5 overflow-x-auto pb-2">
+        <div className="weekly-grid-board grid min-w-[84rem] grid-cols-7 gap-3">
           {weekDays.map((day) => {
             const dayTasks = visibleTasks.filter((task) => task.dayOfWeek === day.dayOfWeek);
             return (

@@ -19,7 +19,7 @@ export function TransferPanel({ weekId, tasks, onTransfer }: TransferPanelProps)
   const candidates = useMemo(
     () =>
       tasks.filter((task) => {
-        if (task.weekId !== previousWeekId || task.completed || task.deleted) return false;
+        if (task.weekId !== previousWeekId || task.completed || task.deleted || task.isGeneralReminder || !task.specificDate) return false;
         return !existingKeys.has(`${task.originTaskId || task.id}|${task.dayOfWeek}`);
       }),
     [existingKeys, previousWeekId, tasks]

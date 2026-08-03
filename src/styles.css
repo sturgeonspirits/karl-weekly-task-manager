@@ -319,6 +319,7 @@
   }
 
   .agenda-row,
+  .reminder-card,
   .shift-row,
   .bill-row,
   .carryover-row,
@@ -337,6 +338,10 @@
   }
 
   .shift-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .reminder-card {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
@@ -449,19 +454,44 @@
 }
 
 @media (max-width: 620px) {
+  .content-surface {
+    padding: 0.85rem;
+  }
+
   .app-nav button {
     flex-direction: column;
     gap: 0.2rem;
     font-size: 0.72rem;
   }
 
+  .weekly-grid-scroll {
+    overflow-x: visible;
+    padding-bottom: 0;
+  }
+
+  .weekly-grid-board {
+    min-width: 0 !important;
+    grid-template-columns: 1fr !important;
+  }
+
+  .day-column {
+    min-height: auto;
+  }
+
+  .segmented-days {
+    min-width: 0;
+    overflow-x: auto;
+  }
+
   .agenda-row,
+  .reminder-card,
   .shift-row,
   .bill-row {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
   .agenda-row .btn-secondary,
+  .reminder-card .icon-button,
   .shift-row .btn-secondary,
   .bill-row strong,
   .bill-row .icon-button:last-child {

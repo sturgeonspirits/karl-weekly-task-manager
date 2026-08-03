@@ -48,15 +48,12 @@ export function dateKeyForWeekDay(weekId: string, dayOfWeek: number): string {
 }
 
 export function dailyEventKey(weekId: string, dayOfWeek: number): string {
-  return `${weekId}-${Math.max(1, Math.min(7, dayOfWeek))}`;
+  return dateKeyForWeekDay(weekId, dayOfWeek);
 }
 
 export function eventKeyFromIsoDate(dateKey: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return null;
-  const date = dateFromKey(dateKey);
-  const monday = startOfWeek(date);
-  const diff = Math.round((date.getTime() - monday.getTime()) / 86_400_000);
-  return `${toLocalDateKey(monday)}-${diff + 1}`;
+  return dateKey;
 }
 
 export function formatShortDate(dateKey: string): string {
@@ -123,6 +120,8 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
         completed: Boolean(task.completed),
         priority: normalizePriority(task.priority),
         repeatPattern: task.repeatPattern || "none",
+        source: task.source || (task.id.startsWith("staff-") ? "staff" : "private"),
+        isGeneralReminder: task.source === "staff" || task.id.startsWith("staff-") ? false : Boolean(task.isGeneralReminder || !specificDate),
         updatedAt: task.updatedAt || Date.now(),
       };
     })
@@ -132,15 +131,25 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
 
 export function sanitizeDailyEvents(events: DailyEvents): DailyEvents {
   const today = todayStr();
-  return Object.fromEntries(
-    Object.entries(events)
-      .filter(([key, note]) => {
-        if (!String(note || "").trim()) return false;
-        const iso = key.match(/^(\d{4}-\d{2}-\d{2})(?:-[1-7])?$/)?.[1];
-        return Boolean(iso && iso >= today);
-      })
-      .map(([key, note]) => [key, String(note).trim()])
-  );
+  const normalized = new Map<string, string[]>();
+
+  Object.entries(events).forEach(([key, note]) => {
+    const cleanNote = String(note || "").trim();
+    if (!cleanNote) return;
+
+    let dateKey: string | null = null;
+    const legacyWeeklyKey = key.match(/^(\d{4}-\d{2}-\d{2})-([1-7])$/);
+    if (legacyWeeklyKey) {
+      dateKey = dateKeyForWeekDay(legacyWeeklyKey[1], Number(legacyWeeklyKey[2]));
+    } else if (isIsoDateKey(key)) {
+      dateKey = key;
+    }
+
+    if (!dateKey || dateKey < today) return;
+    normalized.set(dateKey, [...(normalized.get(dateKey) || []), cleanNote]);
+  });
+
+  return Object.fromEntries(Array.from(normalized.entries()).map(([key, notes]) => [key, Array.from(new Set(notes)).join("\n")]));
 }
 
 export function deduplicateTasks(tasks: Task[]): Task[] {

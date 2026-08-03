@@ -41,26 +41,44 @@ export function createSeedTasks(weekId = CURRENT_WEEK_ID): Task[] {
       assignee: "todd.mclean@sturgeonspirits.com",
       description: "Staff/general todo. Added by Karl Loewenstein.",
       specificDate: "2026-08-07",
+      source: "staff",
+      isGeneralReminder: false,
     }),
     task("auto-yi8eq1e-2026-08-03", "Tasting Room Open 1 - 9 PM", "hospitality", 6, "low"),
     task("auto-4qkartx-2026-08-03", "Tasting Room Open 12-6 PM", "hospitality", 7, "low"),
     task("staff-todo_1784651550639_4759", "bottle rhubarb gin", "Production/Sales", 1, "high", {
       description: "Staff/general todo. Added by Karl Loewenstein. Original todo date: 2026-07-23.",
       specificDate: "2026-08-03",
+      source: "staff",
+      isGeneralReminder: false,
     }),
     task("staff-todo_1785778630720_7813", "can seltzers", "Production/Sales", 1, "medium", {
+      assignee: "Karl Loewenstein",
       description: "Staff/general todo. Added by Karl Loewenstein.",
-      specificDate: "2026-08-03",
+      source: "staff",
+      isGeneralReminder: false,
     }),
     task("staff-todo_1785778648092_7251", "bottle cherry vodka", "Production/Sales", 1, "medium", {
+      assignee: "Karl Loewenstein",
       description: "Staff/general todo. Added by Karl Loewenstein.",
-      specificDate: "2026-08-03",
+      source: "staff",
+      isGeneralReminder: false,
     }),
     task("staff-todo_1785778657961_7443", "make cranberry vodka", "Production/Sales", 1, "medium", {
+      assignee: "Karl Loewenstein",
       description: "Staff/general todo. Added by Karl Loewenstein.",
-      specificDate: "2026-08-03",
+      source: "staff",
+      isGeneralReminder: false,
     }),
-  ].map((item) => ({ ...item, weekId }));
+  ].map((item) => ({
+    ...item,
+    weekId,
+    specificDate:
+      item.source === "staff" && !item.specificDate
+        ? undefined
+        : item.specificDate || dateForWeekDay(weekId, item.dayOfWeek),
+    isGeneralReminder: item.source === "staff" ? false : Boolean(item.isGeneralReminder && !item.specificDate),
+  }));
 }
 
 export function createSeedBills(): Bill[] {
@@ -90,12 +108,20 @@ export function createSeedBills(): Bill[] {
 
 export function createSeedDailyEvents(weekId = CURRENT_WEEK_ID): DailyEvents {
   return {
-    [`${weekId}-3`]: "Trivia",
-    [`${weekId}-4`]: "Cribbage",
-    [`${weekId}-5`]: "Pizza with Amanda & Erin Krebs",
-    [`${weekId}-6`]: "Music -- Bob Campbell",
-    [`${weekId}-7`]: "Closed for an Engagement Party",
+    [dateForWeekDay(weekId, 3)]: "Trivia",
+    [dateForWeekDay(weekId, 4)]: "Cribbage",
+    [dateForWeekDay(weekId, 5)]: "Pizza with Amanda & Erin Krebs",
+    [dateForWeekDay(weekId, 6)]: "Music -- Bob Campbell",
+    [dateForWeekDay(weekId, 7)]: "Closed for an Engagement Party",
   };
+}
+
+function dateForWeekDay(weekId: string, dayOfWeek: number): string {
+  const [year, month, day] = weekId.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + Math.max(1, Math.min(7, dayOfWeek)) - 1);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 }
 
 function task(
@@ -117,6 +143,8 @@ function task(
     repeatsWeekly: false,
     repeatPattern: "none",
     updatedAt: 1785777602775,
+    source: "private",
+    isGeneralReminder: false,
     ...overrides,
   };
 }

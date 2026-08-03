@@ -1,6 +1,5 @@
 import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "../types";
 import {
-  dailyEventKey,
   dateKeyForWeekDay,
   deduplicateTasks,
   eventKeyFromIsoDate,
@@ -11,6 +10,7 @@ import {
   sanitizeTasks,
   todayStr,
   toLocalDateKey,
+  weekIdFromDate,
 } from "../utils";
 
 export const DEFAULT_PRIVATE_SHEET_ID = "1NQKvTSWvpTZ3uRsYWMUPAdOa_bHvsp_VMpc7EX1c_tI";
@@ -60,7 +60,7 @@ const TASK_HEADERS = [
   "updatedAt",
 ];
 
-const DAILY_HEADERS = ["dateKey", "note"];
+const DAILY_HEADERS = ["date", "text"];
 const CATEGORY_HEADERS = ["id", "name", "color"];
 const BILL_HEADERS = ["id", "name", "amount", "dueDate", "paid", "category", "recurring", "updatedAt"];
 const STAFF_HEADERS = ["id", "name", "role", "email", "phone", "color"];
@@ -229,6 +229,7 @@ function pickTab(tabs: string[], names: string[]): string | null {
 }
 
 function parseTasks(rows: string[][]): Task[] {
+  const fallbackWeekId = weekIdFromDate(new Date());
   return rows
     .slice(1)
     .filter((row) => !isInvalidTitle(row[1]))
@@ -236,6 +237,8 @@ function parseTasks(rows: string[][]): Task[] {
     .map((row) => {
       const repeatPattern: Task["repeatPattern"] =
         row[8] === "weekly" || row[8] === "biweekly" ? row[8] : "none";
+      const specificDate = row[11] || undefined;
+      const weekId = row[6] || (specificDate ? weekIdFromDate(new Date(`${specificDate}T12:00:00`)) : fallbackWeekId);
       return {
         id: row[0] || crypto.randomUUID(),
         title: row[1] || "",
@@ -243,16 +246,18 @@ function parseTasks(rows: string[][]): Task[] {
         description: row[3] || "",
         dayOfWeek: Number(row[4] || 1),
         completed: parseBoolean(row[5]),
-        weekId: row[6] || "",
+        weekId,
         repeatsWeekly: parseBoolean(row[7]),
         repeatPattern,
         originTaskId: row[9] || undefined,
         deleted: parseBoolean(row[10]),
-        specificDate: row[11] || undefined,
+        specificDate,
         assignee: row[12] || undefined,
         priority: normalizePriority(row[13]),
         shiftHours: row[14] || undefined,
         updatedAt: Number(row[15] || Date.now()),
+        source: "private" as const,
+        isGeneralReminder: !specificDate,
       };
     })
     .filter((task) => task.weekId);
@@ -265,8 +270,8 @@ function parseTodos(rows: string[][]): Task[] {
     .filter((row) => !isInvalidTitle(row[1]))
     .map((row) => {
       const completed = parseBoolean(row[3]);
-      const rawDate = /^\d{4}-\d{2}-\d{2}$/.test(row[8] || "") ? row[8] : String(row[5] || "").slice(0, 10);
-      const sourceDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : todayKey;
+      const hasExplicitDate = /^\d{4}-\d{2}-\d{2}$/.test(row[8] || "");
+      const sourceDate = hasExplicitDate ? row[8] : todayKey;
       const taskDate = !completed && sourceDate < todayKey ? todayKey : sourceDate;
       const date = new Date(`${taskDate}T12:00:00`);
       const day = date.getDay();
@@ -294,10 +299,12 @@ function parseTodos(rows: string[][]): Task[] {
         repeatPattern: "none",
         originTaskId: row[12] || undefined,
         deleted: false,
-        specificDate: taskDate,
+        specificDate: hasExplicitDate ? taskDate : undefined,
         updatedAt: Date.parse(row[7] || row[5] || "") || Date.now(),
         assignee: row[10] || row[4] || undefined,
         shiftHours: row[14] || undefined,
+        source: "staff",
+        isGeneralReminder: false,
       } satisfies Task;
     });
 }
@@ -309,13 +316,14 @@ function parseDailyEvents(rows: string[][]): DailyEvents {
     const note = String(row[1] || "").trim();
     if (!rawKey || !note) return;
     const key = normalizeDailyEventKey(rawKey);
-    if (key) events[key] = note;
+    if (key) events[key] = events[key] ? `${events[key]}\n${note}` : note;
   });
   return sanitizeDailyEvents(events);
 }
 
 function normalizeDailyEventKey(rawKey: string): string | null {
-  if (/^\d{4}-\d{2}-\d{2}-[1-7]$/.test(rawKey)) return rawKey;
+  const legacyWeeklyKey = rawKey.match(/^(\d{4}-\d{2}-\d{2})-([1-7])$/);
+  if (legacyWeeklyKey) return dateKeyForWeekDay(legacyWeeklyKey[1], Number(legacyWeeklyKey[2]));
   if (/^\d{4}-\d{2}-\d{2}$/.test(rawKey)) return eventKeyFromIsoDate(rawKey);
 
   const usDate = rawKey.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -324,7 +332,7 @@ function normalizeDailyEventKey(rawKey: string): string | null {
   const [, month, day, year] = usDate;
   const date = new Date(Number(year), Number(month) - 1, Number(day));
   if (Number.isNaN(date.getTime())) return null;
-  return eventKeyFromIsoDate(toLocalDateKey(date));
+  return toLocalDateKey(date);
 }
 
 function parseCategories(rows: string[][]): CategoryOption[] {
@@ -406,7 +414,7 @@ export async function pullOperationsSnapshot(
 ): Promise<OperationsSnapshot> {
   const tabs = await getSheetTitles(spreadsheetId, accessToken);
   const taskTab = pickTab(tabs, ["Todos", "Todo", "Tasks"]);
-  const dailyTab = pickTab(tabs, ["Daily Notes", "Events", "Notes", "Daily Agenda"]);
+  const dailyTab = pickTab(tabs, ["Events", "Daily Notes", "Notes", "Daily Agenda"]);
   const categoryTab = pickTab(tabs, ["Categories"]);
   const billTab = pickTab(tabs, ["Bills", "Expenses"]);
   const staffTab = pickTab(tabs, ["Staff", "Staff Members"]);
@@ -462,7 +470,7 @@ export async function pushOperationsSnapshot(
       name: "Tasks",
       values: [
         TASK_HEADERS,
-        ...snapshot.tasks.map((task) => [
+        ...snapshot.tasks.filter((task) => task.source !== "staff").map((task) => [
           task.id,
           task.title,
           task.category,
@@ -483,7 +491,7 @@ export async function pushOperationsSnapshot(
       ],
     },
     {
-      name: "Daily Notes",
+      name: "Events",
       values: [DAILY_HEADERS, ...Object.entries(snapshot.dailyEvents).map(([key, note]) => [key, note])],
     },
     {
@@ -531,7 +539,7 @@ export async function pushStaffSchedule(
   staff: StaffMember[]
 ): Promise<void> {
   const staffByName = new Map(staff.map((person) => [person.name, person]));
-  const activeTasks = tasks.filter((task) => !task.deleted && task.weekId === weekId);
+  const activeTasks = tasks.filter((task) => !task.deleted && !task.isGeneralReminder && task.weekId === weekId && task.specificDate);
 
   await overwriteSheets(spreadsheetId, accessToken, [
     {

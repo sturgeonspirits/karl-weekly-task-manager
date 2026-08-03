@@ -75,6 +75,7 @@ export function TaskDialog({
     if (!title) return;
 
     onSave({
+      ...task,
       id: task?.id || makeId("task"),
       title,
       description: form.description.trim(),
@@ -87,10 +88,15 @@ export function TaskDialog({
       repeatPattern: form.repeatsWeekly ? form.repeatPattern : "none",
       originTaskId: task?.originTaskId,
       deleted: task?.deleted,
-      specificDate: dateKeyForWeekDay(task?.weekId || weekId, form.dayOfWeek),
+      specificDate:
+        task?.isGeneralReminder || (task?.source === "staff" && !task.specificDate)
+          ? undefined
+          : dateKeyForWeekDay(task?.weekId || weekId, form.dayOfWeek),
       updatedAt: Date.now(),
       assignee: form.assignee.trim() || undefined,
       shiftHours: form.shiftHours.trim() || undefined,
+      source: task?.source || "private",
+      isGeneralReminder: task?.source === "staff" ? false : Boolean(task?.isGeneralReminder),
     });
   }
 

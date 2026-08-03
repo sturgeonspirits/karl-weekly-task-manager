@@ -17,6 +17,8 @@ export interface Task {
   updatedAt?: number;
   assignee?: string;
   shiftHours?: string;
+  source?: "private" | "staff";
+  isGeneralReminder?: boolean;
 }
 
 export interface CategoryOption {

@@ -1,16 +1,8 @@
-import {
-  ArrowRightLeft,
-  BadgeDollarSign,
-  CalendarDays,
-  ClipboardList,
-  LayoutGrid,
-  RotateCcw,
-  Sheet,
-  UsersRound,
-} from "lucide-react";
+import { ArrowRightLeft, BadgeDollarSign, CalendarDays, LayoutGrid, RotateCcw, Sheet, UsersRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { BillsView } from "./components/BillsView";
 import { DailyAgendaView } from "./components/DailyAgendaView";
+import { GeneralRemindersPanel } from "./components/GeneralRemindersPanel";
 import { SheetsSyncPanel } from "./components/SheetsSyncPanel";
 import { StaffSchedulerView } from "./components/StaffSchedulerView";
 import { TaskDialog } from "./components/TaskDialog";
@@ -44,7 +36,7 @@ type SyncConfig = {
 
 const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }> = [
   { id: "weekly", label: "Weekly", icon: LayoutGrid },
-  { id: "daily", label: "Daily", icon: CalendarDays },
+  { id: "daily", label: "Agenda", icon: CalendarDays },
   { id: "staff", label: "Staff", icon: UsersRound },
   { id: "bills", label: "Bills", icon: BadgeDollarSign },
   { id: "transfer", label: "Transfer", icon: ArrowRightLeft },
@@ -141,12 +133,25 @@ export default function App() {
     localStorage.setItem(CONFIG_KEY, JSON.stringify(syncConfig));
   }, [syncConfig]);
 
+  const scheduledTasks = useMemo(
+    () => snapshot.tasks.filter((task) => !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate)),
+    [snapshot.tasks]
+  );
   const activeWeekTasks = useMemo(
-    () => snapshot.tasks.filter((task) => task.weekId === weekId && !task.deleted),
-    [snapshot.tasks, weekId]
+    () => scheduledTasks.filter((task) => task.weekId === weekId),
+    [scheduledTasks, weekId]
+  );
+  const generalReminderTasks = useMemo(
+    () => snapshot.tasks.filter((task) => task.source !== "staff" && task.isGeneralReminder && !task.deleted),
+    [snapshot.tasks]
+  );
+  const staffSchedulerTasks = useMemo(
+    () => snapshot.tasks.filter((task) => task.source === "staff" || task.id.startsWith("staff-")),
+    [snapshot.tasks]
   );
 
-  const dailyNote = snapshot.dailyEvents[`${weekId}-${selectedDay}`] || "";
+  const selectedDateKey = dateKeyForWeekDay(weekId, selectedDay);
+  const dailyNote = snapshot.dailyEvents[selectedDateKey] || "";
   const completed = activeWeekTasks.filter((task) => task.completed).length;
   const highPriority = activeWeekTasks.filter((task) => !task.completed && task.priority === "high").length;
   const assigned = activeWeekTasks.filter((task) => task.assignee).length;
@@ -165,9 +170,17 @@ export default function App() {
   }
 
   function saveTask(task: Task) {
-    const exists = snapshot.tasks.some((item) => item.id === task.id);
-    setTasks(exists ? snapshot.tasks.map((item) => (item.id === task.id ? task : item)) : [...snapshot.tasks, task]);
-    setDialog({ open: false, day: task.dayOfWeek, task: null });
+    const source = task.source || (task.id.startsWith("staff-") ? "staff" : "private");
+    const specificDate = task.isGeneralReminder || (source === "staff" && !task.specificDate) ? undefined : task.specificDate;
+    const normalizedTask: Task = {
+      ...task,
+      source,
+      specificDate,
+      isGeneralReminder: source === "staff" ? false : Boolean(task.isGeneralReminder || !specificDate),
+    };
+    const exists = snapshot.tasks.some((item) => item.id === normalizedTask.id);
+    setTasks(exists ? snapshot.tasks.map((item) => (item.id === normalizedTask.id ? normalizedTask : item)) : [...snapshot.tasks, normalizedTask]);
+    setDialog({ open: false, day: normalizedTask.dayOfWeek, task: null });
   }
 
   function toggleTask(taskId: string) {
@@ -187,6 +200,7 @@ export default function App() {
       completed: false,
       originTaskId: task.originTaskId || task.id,
       specificDate: dateKeyForWeekDay(nextWeekId, task.dayOfWeek),
+      isGeneralReminder: false,
       updatedAt: Date.now(),
     };
     setTasks([...snapshot.tasks, clone]);
@@ -204,7 +218,14 @@ export default function App() {
 
   function transferTasks(tasks: Task[]) {
     if (!tasks.length) return;
-    setTasks([...snapshot.tasks, ...tasks.map((task) => ({ ...task, specificDate: dateKeyForWeekDay(weekId, task.dayOfWeek) }))]);
+    setTasks([
+      ...snapshot.tasks,
+      ...tasks.map((task) => ({
+        ...task,
+        specificDate: dateKeyForWeekDay(weekId, task.dayOfWeek),
+        isGeneralReminder: false,
+      })),
+    ]);
   }
 
   function resetLocalData() {
@@ -285,7 +306,7 @@ export default function App() {
     setSyncBusy(true);
     setSyncStatus("Publishing staff schedule...");
     try {
-      await pushStaffSchedule(extractSpreadsheetId(syncConfig.publicStaffSheetId), accessToken, weekId, snapshot.tasks, snapshot.staff);
+      await pushStaffSchedule(extractSpreadsheetId(syncConfig.publicStaffSheetId), accessToken, weekId, scheduledTasks, snapshot.staff);
       setSyncStatus("Public staff schedule was updated.");
     } catch (error) {
       setSyncStatus(error instanceof Error ? error.message : "Staff schedule push failed.");
@@ -351,10 +372,17 @@ export default function App() {
           </div>
         </section>
 
+        <GeneralRemindersPanel
+          tasks={generalReminderTasks}
+          categories={snapshot.categories}
+          onToggleTask={toggleTask}
+          onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
+        />
+
         {activeView === "weekly" ? (
           <WeeklyGrid
             weekId={weekId}
-            tasks={snapshot.tasks}
+            tasks={scheduledTasks}
             categories={snapshot.categories}
             staff={snapshot.staff}
             searchTerm={searchTerm}
@@ -373,7 +401,7 @@ export default function App() {
           <DailyAgendaView
             weekId={weekId}
             selectedDay={selectedDay}
-            tasks={snapshot.tasks}
+            tasks={scheduledTasks}
             categories={snapshot.categories}
             staff={snapshot.staff}
             dailyNote={dailyNote}
@@ -388,10 +416,9 @@ export default function App() {
         {activeView === "staff" ? (
           <StaffSchedulerView
             weekId={weekId}
-            tasks={snapshot.tasks}
+            tasks={staffSchedulerTasks}
             staff={snapshot.staff}
             syncBusy={syncBusy}
-            onSaveStaff={setStaff}
             onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
             onToggleTask={toggleTask}
             onPushStaffSchedule={pushStaff}
@@ -400,7 +427,7 @@ export default function App() {
 
         {activeView === "bills" ? <BillsView bills={snapshot.bills} onSaveBills={setBills} /> : null}
 
-        {activeView === "transfer" ? <TransferPanel weekId={weekId} tasks={snapshot.tasks} onTransfer={transferTasks} /> : null}
+        {activeView === "transfer" ? <TransferPanel weekId={weekId} tasks={scheduledTasks} onTransfer={transferTasks} /> : null}
 
         {activeView === "sync" ? (
           <SheetsSyncPanel

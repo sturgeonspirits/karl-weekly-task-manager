@@ -37,7 +37,7 @@ export function DailyAgendaView({
   const dayTasks = useMemo(
     () =>
       tasks
-        .filter((task) => task.weekId === weekId && task.dayOfWeek === selectedDay && !task.deleted)
+        .filter((task) => task.weekId === weekId && task.dayOfWeek === selectedDay && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate))
         .sort((a, b) => Number(a.completed) - Number(b.completed) || a.title.localeCompare(b.title)),
     [selectedDay, tasks, weekId]
   );
@@ -56,6 +56,8 @@ export function DailyAgendaView({
       weekId,
       repeatPattern: "none",
       specificDate: dateKey,
+      source: "private",
+      isGeneralReminder: false,
       assignee: staff[0]?.name,
       shiftHours: "",
       updatedAt: Date.now(),
@@ -87,7 +89,7 @@ export function DailyAgendaView({
       <label className="mt-5 block rounded-lg border border-amber-200 bg-amber-50 p-4">
         <span className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-900">
           <CalendarCheck size={17} />
-          {noteKey}
+          Events note · {dateKey}
         </span>
         <textarea
           className="border-amber-200 bg-white/80"
