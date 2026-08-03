@@ -1,13 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
   <title id="title">Karl Weekly Task Manager</title>
-  <desc id="desc">Sturgeon Spirits brand-style app icon</desc>
-  <rect width="512" height="512" rx="92" fill="#242622"/>
-  <path d="M66 379h380" fill="none" stroke="#7E613F" stroke-width="14" stroke-linecap="round"/>
-  <path d="M112 344c44-78 104-117 180-117 44 0 82 11 114 34 13 9 25 14 37 15-20 21-46 35-79 40l-34 49c-7-27-19-43-35-49-54 3-100 13-137 30-20 9-35 17-46 25z" fill="#F1F1E7"/>
-  <path d="M113 344c42-36 96-54 162-54 55 0 99-8 132-24" fill="none" stroke="#96321F" stroke-width="18" stroke-linecap="round"/>
-  <path d="M158 289l-34-48 64 24" fill="#C8BCA4"/>
-  <circle cx="365" cy="270" r="9" fill="#242622"/>
-  <path d="M122 158h268" fill="none" stroke="#87A67F" stroke-width="14" stroke-linecap="round"/>
-  <path d="M155 120h202" fill="none" stroke="#96321F" stroke-width="14" stroke-linecap="round"/>
-  <path d="M184 164l-39 39m183-39 39 39" fill="none" stroke="#C8BCA4" stroke-width="12" stroke-linecap="round"/>
+  <desc id="desc">A bold Karl task manager icon with a K and check mark.</desc>
+  <rect width="512" height="512" rx="108" fill="#F7F1E3"/>
+  <rect x="42" y="42" width="428" height="428" rx="92" fill="#96321F"/>
+  <path d="M162 132v248" fill="none" stroke="#F7F1E3" stroke-width="58" stroke-linecap="round"/>
+  <path
+    d="M342 142 196 256l152 116"
+    fill="none"
+    stroke="#F7F1E3"
+    stroke-width="58"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="364" cy="356" r="86" fill="#87A67F" stroke="#F7F1E3" stroke-width="24"/>
+  <path
+    d="m319 357 31 31 61-72"
+    fill="none"
+    stroke="#242622"
+    stroke-width="32"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
 </svg>
