@@ -1,23 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
   <title id="title">Karl Weekly Task Manager</title>
-  <desc id="desc">A bold Karl task manager icon with a K and check mark.</desc>
+  <desc id="desc">A Sturgeon Spirits task manager icon with a sturgeon and check mark.</desc>
   <rect width="512" height="512" rx="108" fill="#F7F1E3"/>
   <rect x="42" y="42" width="428" height="428" rx="92" fill="#96321F"/>
-  <path d="M162 132v248" fill="none" stroke="#F7F1E3" stroke-width="58" stroke-linecap="round"/>
   <path
-    d="M342 142 196 256l152 116"
+    d="M74 265c43-62 107-93 192-93 63 0 115 18 154 53 16 14 34 23 55 26-23 25-58 42-105 49l-45 62c-10-36-29-59-58-69-56 3-105 17-147 43l-50 31 24-62c-18-9-25-22-20-40z"
+    fill="#F7F1E3"
+  />
+  <path d="M101 284 65 232l74 25" fill="#C8BCA4"/>
+  <path
+    d="M127 284c47-34 105-51 173-51 50 0 94-8 132-24"
+    fill="none"
+    stroke="#87A67F"
+    stroke-width="22"
+    stroke-linecap="round"
+  />
+  <path
+    d="M171 221c-16-20-29-42-37-66m75 55-19-68m64 64-3-71"
     fill="none"
     stroke="#F7F1E3"
-    stroke-width="58"
+    stroke-width="16"
     stroke-linecap="round"
-    stroke-linejoin="round"
   />
-  <circle cx="364" cy="356" r="86" fill="#87A67F" stroke="#F7F1E3" stroke-width="24"/>
+  <circle cx="383" cy="235" r="11" fill="#242622"/>
+  <circle cx="374" cy="360" r="76" fill="#87A67F" stroke="#F7F1E3" stroke-width="22"/>
   <path
-    d="m319 357 31 31 61-72"
+    d="m334 360 28 27 55-65"
     fill="none"
     stroke="#242622"
-    stroke-width="32"
+    stroke-width="28"
     stroke-linecap="round"
     stroke-linejoin="round"
   />
