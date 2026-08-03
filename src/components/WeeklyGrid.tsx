@@ -9,7 +9,7 @@ import {
   Search,
 } from "lucide-react";
 import { useMemo } from "react";
-import type { CategoryOption, StaffMember, Task } from "../types";
+import type { CategoryOption, DailyEvents, StaffMember, Task } from "../types";
 import { addDays, dateFromKey, DAY_NAMES, formatShortDate, toLocalDateKey, weekIdFromDate } from "../utils";
 import { categoryTone, priorityLabel, priorityTone, staffDot } from "../lib/ui";
 
@@ -18,6 +18,7 @@ type WeeklyGridProps = {
   tasks: Task[];
   categories: CategoryOption[];
   staff: StaffMember[];
+  dailyEvents: DailyEvents;
   searchTerm: string;
   categoryFilter: string;
   onSearch: (value: string) => void;
@@ -34,6 +35,7 @@ export function WeeklyGrid({
   tasks,
   categories,
   staff,
+  dailyEvents,
   searchTerm,
   categoryFilter,
   onSearch,
@@ -147,6 +149,7 @@ export function WeeklyGrid({
         <div className="weekly-grid-board grid min-w-[84rem] grid-cols-7 gap-3">
           {weekDays.map((day) => {
             const dayTasks = visibleTasks.filter((task) => task.dayOfWeek === day.dayOfWeek);
+            const eventNote = dailyEvents[day.dateKey] || "";
             return (
               <div key={day.dayOfWeek} className="day-column">
                 <div className="flex items-start justify-between gap-2">
@@ -163,6 +166,12 @@ export function WeeklyGrid({
                     <Plus size={16} />
                   </button>
                 </div>
+
+                {eventNote ? (
+                  <div className="weekly-event-note" title={eventNote}>
+                    {eventNote}
+                  </div>
+                ) : null}
 
                 <div className="mt-3 grid gap-3">
                   {dayTasks.map((task) => {

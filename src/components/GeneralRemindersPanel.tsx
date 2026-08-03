@@ -1,4 +1,4 @@
-import { Bell, Pencil } from "lucide-react";
+import { Bell, Pencil, Plus } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, Task } from "../types";
 import { categoryTone, priorityLabel, priorityTone } from "../lib/ui";
@@ -6,11 +6,12 @@ import { categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 type GeneralRemindersPanelProps = {
   tasks: Task[];
   categories: CategoryOption[];
+  onAddReminder: () => void;
   onToggleTask: (taskId: string) => void;
   onEditTask: (task: Task) => void;
 };
 
-export function GeneralRemindersPanel({ tasks, categories, onToggleTask, onEditTask }: GeneralRemindersPanelProps) {
+export function GeneralRemindersPanel({ tasks, categories, onAddReminder, onToggleTask, onEditTask }: GeneralRemindersPanelProps) {
   const reminders = useMemo(() => {
     const priorityOrder = { high: 0, medium: 1, low: 2 };
     return tasks
@@ -19,8 +20,6 @@ export function GeneralRemindersPanel({ tasks, categories, onToggleTask, onEditT
       .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority] || a.title.localeCompare(b.title));
   }, [tasks]);
 
-  if (!reminders.length) return null;
-
   return (
     <section className="content-surface">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -28,10 +27,16 @@ export function GeneralRemindersPanel({ tasks, categories, onToggleTask, onEditT
           <p className="eyebrow">General reminders</p>
           <h2 className="page-title">Karl's undated task reminders</h2>
         </div>
-        <span className="stat-pill">
-          <Bell size={15} />
-          {reminders.length} open
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="stat-pill">
+            <Bell size={15} />
+            {reminders.length} open
+          </span>
+          <button className="btn-secondary" type="button" onClick={onAddReminder}>
+            <Plus size={17} />
+            Add Reminder
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -57,6 +62,13 @@ export function GeneralRemindersPanel({ tasks, categories, onToggleTask, onEditT
             </button>
           </article>
         ))}
+
+        {!reminders.length ? (
+          <div className="empty-state md:col-span-2 xl:col-span-3">
+            <Bell size={20} />
+            <span>No undated private task reminders loaded.</span>
+          </div>
+        ) : null}
       </div>
     </section>
   );

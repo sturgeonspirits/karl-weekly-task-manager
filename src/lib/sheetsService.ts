@@ -413,7 +413,7 @@ export async function pullOperationsSnapshot(
   fallback: OperationsSnapshot
 ): Promise<OperationsSnapshot> {
   const tabs = await getSheetTitles(spreadsheetId, accessToken);
-  const taskTab = pickTab(tabs, ["Todos", "Todo", "Tasks"]);
+  const taskTab = pickTab(tabs, ["Tasks", "Task List", "Todos", "Todo"]);
   const dailyTab = pickTab(tabs, ["Events", "Daily Notes", "Notes", "Daily Agenda"]);
   const categoryTab = pickTab(tabs, ["Categories"]);
   const billTab = pickTab(tabs, ["Bills", "Expenses"]);

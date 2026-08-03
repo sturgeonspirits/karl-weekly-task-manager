@@ -7,6 +7,7 @@ type TaskDialogProps = {
   open: boolean;
   weekId: string;
   defaultDay: number;
+  defaultGeneralReminder?: boolean;
   task?: Task | null;
   categories: CategoryOption[];
   staff: StaffMember[];
@@ -24,9 +25,16 @@ type TaskForm = {
   shiftHours: string;
   repeatsWeekly: boolean;
   repeatPattern: "weekly" | "biweekly" | "none";
+  isGeneralReminder: boolean;
 };
 
-function createForm(task: Task | null | undefined, weekId: string, defaultDay: number, categories: CategoryOption[]): TaskForm {
+function createForm(
+  task: Task | null | undefined,
+  weekId: string,
+  defaultDay: number,
+  categories: CategoryOption[],
+  defaultGeneralReminder = false
+): TaskForm {
   return {
     title: task?.title || "",
     description: task?.description || "",
@@ -37,6 +45,7 @@ function createForm(task: Task | null | undefined, weekId: string, defaultDay: n
     shiftHours: task?.shiftHours || "",
     repeatsWeekly: Boolean(task?.repeatsWeekly),
     repeatPattern: task?.repeatPattern || "none",
+    isGeneralReminder: task?.source === "staff" ? false : Boolean(task?.isGeneralReminder || defaultGeneralReminder),
   };
 }
 
@@ -44,6 +53,7 @@ export function TaskDialog({
   open,
   weekId,
   defaultDay,
+  defaultGeneralReminder = false,
   task,
   categories,
   staff,
@@ -51,16 +61,16 @@ export function TaskDialog({
   onSave,
 }: TaskDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  const [form, setForm] = useState<TaskForm>(() => createForm(task, weekId, defaultDay, categories));
+  const [form, setForm] = useState<TaskForm>(() => createForm(task, weekId, defaultDay, categories, defaultGeneralReminder));
 
   useEffect(() => {
     if (open) {
-      setForm(createForm(task, weekId, defaultDay, categories));
+      setForm(createForm(task, weekId, defaultDay, categories, defaultGeneralReminder));
       if (!dialogRef.current?.open) dialogRef.current?.showModal();
     } else if (dialogRef.current?.open) {
       dialogRef.current.close();
     }
-  }, [categories, defaultDay, open, task, weekId]);
+  }, [categories, defaultDay, defaultGeneralReminder, open, task, weekId]);
 
   const isEditing = Boolean(task);
   const dayOptions = useMemo(() => [1, 2, 3, 4, 5, 6, 7], []);
@@ -84,19 +94,19 @@ export function TaskDialog({
       priority: form.priority,
       category: form.category,
       weekId: task?.weekId || weekId,
-      repeatsWeekly: form.repeatsWeekly,
-      repeatPattern: form.repeatsWeekly ? form.repeatPattern : "none",
+      repeatsWeekly: form.isGeneralReminder ? false : form.repeatsWeekly,
+      repeatPattern: form.isGeneralReminder || !form.repeatsWeekly ? "none" : form.repeatPattern,
       originTaskId: task?.originTaskId,
       deleted: task?.deleted,
       specificDate:
-        task?.isGeneralReminder || (task?.source === "staff" && !task.specificDate)
+        form.isGeneralReminder || (task?.source === "staff" && !task.specificDate)
           ? undefined
           : dateKeyForWeekDay(task?.weekId || weekId, form.dayOfWeek),
       updatedAt: Date.now(),
       assignee: form.assignee.trim() || undefined,
       shiftHours: form.shiftHours.trim() || undefined,
       source: task?.source || "private",
-      isGeneralReminder: task?.source === "staff" ? false : Boolean(task?.isGeneralReminder),
+      isGeneralReminder: task?.source === "staff" ? false : form.isGeneralReminder,
     });
   }
 
@@ -106,7 +116,9 @@ export function TaskDialog({
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="eyebrow">{isEditing ? "Edit task" : "Add task"}</p>
-            <h2 className="text-xl font-semibold text-slate-950">{isEditing ? task?.title : "New operations task"}</h2>
+            <h2 className="text-xl font-semibold text-slate-950">
+              {isEditing ? task?.title : form.isGeneralReminder ? "New undated reminder" : "New operations task"}
+            </h2>
           </div>
           <button type="button" className="icon-button" aria-label="Close task form" onClick={onClose}>
             <X size={18} />
@@ -124,10 +136,28 @@ export function TaskDialog({
             <textarea value={form.description} onChange={(event) => update("description", event.target.value)} />
           </label>
 
+          {task?.source !== "staff" ? (
+            <div className="option-panel">
+              <label className="inline-flex items-center gap-3 text-sm font-semibold text-slate-800">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-300"
+                  checked={form.isGeneralReminder}
+                  onChange={(event) => update("isGeneralReminder", event.target.checked)}
+                />
+                General reminder
+              </label>
+            </div>
+          ) : null}
+
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="field-label">
               <span>Day</span>
-              <select value={form.dayOfWeek} onChange={(event) => update("dayOfWeek", Number(event.target.value))}>
+              <select
+                value={form.dayOfWeek}
+                disabled={form.isGeneralReminder}
+                onChange={(event) => update("dayOfWeek", Number(event.target.value))}
+              >
                 {dayOptions.map((day) => (
                   <option key={day} value={day}>
                     {day}
@@ -180,12 +210,13 @@ export function TaskDialog({
             </label>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="option-panel">
             <label className="inline-flex items-center gap-3 text-sm font-semibold text-slate-800">
               <input
                 type="checkbox"
                 className="h-4 w-4 rounded border-slate-300"
-                checked={form.repeatsWeekly}
+                checked={!form.isGeneralReminder && form.repeatsWeekly}
+                disabled={form.isGeneralReminder}
                 onChange={(event) => update("repeatsWeekly", event.target.checked)}
               />
               Repeats
@@ -193,7 +224,7 @@ export function TaskDialog({
             <select
               className="mt-3"
               value={form.repeatPattern}
-              disabled={!form.repeatsWeekly}
+              disabled={form.isGeneralReminder || !form.repeatsWeekly}
               onChange={(event) => update("repeatPattern", event.target.value as TaskForm["repeatPattern"])}
             >
               <option value="none">None</option>

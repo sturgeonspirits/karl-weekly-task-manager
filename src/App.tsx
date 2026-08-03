@@ -8,7 +8,7 @@ import { StaffSchedulerView } from "./components/StaffSchedulerView";
 import { TaskDialog } from "./components/TaskDialog";
 import { TransferPanel } from "./components/TransferPanel";
 import { WeeklyGrid } from "./components/WeeklyGrid";
-import { createSeedBills, createSeedDailyEvents, createSeedTasks, seedCategories, seedStaff } from "./data/seedData";
+import { seedCategories } from "./data/seedData";
 import {
   DEFAULT_PRIVATE_SHEET_ID,
   DEFAULT_STAFF_TODOS_SHEET_ID,
@@ -26,7 +26,7 @@ const STORAGE_KEY = "karl-weekly-task-manager-v2";
 const CONFIG_KEY = "karl-weekly-task-manager-config-v2";
 
 type ActiveView = "weekly" | "daily" | "staff" | "bills" | "transfer" | "sync";
-type DialogState = { open: boolean; day: number; task?: Task | null };
+type DialogState = { open: boolean; day: number; task?: Task | null; generalReminder?: boolean };
 type SyncConfig = {
   privateSheetId: string;
   staffTodosSheetId: string;
@@ -40,16 +40,16 @@ const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }
   { id: "staff", label: "Staff", icon: UsersRound },
   { id: "bills", label: "Bills", icon: BadgeDollarSign },
   { id: "transfer", label: "Transfer", icon: ArrowRightLeft },
-  { id: "sync", label: "Sheets", icon: Sheet },
+  { id: "sync", label: "Sync", icon: Sheet },
 ];
 
 function loadSnapshot(weekId: string): OperationsSnapshot {
   const fallback: OperationsSnapshot = {
-    tasks: createSeedTasks(weekId),
+    tasks: [],
     categories: seedCategories,
-    bills: createSeedBills(),
-    staff: seedStaff,
-    dailyEvents: createSeedDailyEvents(weekId),
+    bills: [],
+    staff: [],
+    dailyEvents: {},
   };
 
   try {
@@ -115,7 +115,6 @@ function mergeStaff(primary: StaffMember[], secondary: StaffMember[]): StaffMemb
 export default function App() {
   const [weekId, setWeekId] = useState(() => weekIdFromDate(new Date()));
   const [activeView, setActiveView] = useState<ActiveView>("weekly");
-  const [selectedDay, setSelectedDay] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [dialog, setDialog] = useState<DialogState>({ open: false, day: 1, task: null });
@@ -150,8 +149,6 @@ export default function App() {
     [snapshot.tasks]
   );
 
-  const selectedDateKey = dateKeyForWeekDay(weekId, selectedDay);
-  const dailyNote = snapshot.dailyEvents[selectedDateKey] || "";
   const completed = activeWeekTasks.filter((task) => task.completed).length;
   const highPriority = activeWeekTasks.filter((task) => !task.completed && task.priority === "high").length;
   const assigned = activeWeekTasks.filter((task) => task.assignee).length;
@@ -229,14 +226,15 @@ export default function App() {
   }
 
   function resetLocalData() {
+    if (!window.confirm("Clear this browser's cached app data? Google Sheets will not be changed.")) return;
     const next = weekIdFromDate(new Date());
     setWeekId(next);
     setSnapshot({
-      tasks: createSeedTasks(next),
+      tasks: [],
       categories: seedCategories,
-      bills: createSeedBills(),
-      staff: seedStaff,
-      dailyEvents: createSeedDailyEvents(next),
+      bills: [],
+      staff: [],
+      dailyEvents: {},
     });
   }
 
@@ -316,20 +314,20 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-mash text-slate-900">
+    <div className="min-h-screen bg-mash text-ink">
       <header className="app-header">
         <div className="mx-auto flex max-w-[1500px] flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
             <div>
-              <p className="eyebrow text-orange-100">Karl Weekly Task Manager</p>
-              <h1 className="text-2xl font-semibold text-white sm:text-3xl">Distillery Schedule & Operations Desk</h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
+              <p className="eyebrow text-[#96321F]">Karl Weekly Task Manager</p>
+              <h1 className="text-2xl font-semibold text-ink sm:text-3xl">Distillery Schedule & Operations Desk</h1>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-[#7E613F]">
                 Weekly tasks, daily notes, staff shifts, bills, carryover, and Google Sheets sync in one operations desk.
               </p>
             </div>
             <button className="btn-header" type="button" onClick={resetLocalData}>
               <RotateCcw size={17} />
-              Reset Demo Data
+              Clear App Cache
             </button>
           </div>
 
@@ -375,6 +373,7 @@ export default function App() {
         <GeneralRemindersPanel
           tasks={generalReminderTasks}
           categories={snapshot.categories}
+          onAddReminder={() => setDialog({ open: true, day: 1, task: null, generalReminder: true })}
           onToggleTask={toggleTask}
           onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
         />
@@ -385,6 +384,7 @@ export default function App() {
             tasks={scheduledTasks}
             categories={snapshot.categories}
             staff={snapshot.staff}
+            dailyEvents={snapshot.dailyEvents}
             searchTerm={searchTerm}
             categoryFilter={categoryFilter}
             onSearch={setSearchTerm}
@@ -400,12 +400,10 @@ export default function App() {
         {activeView === "daily" ? (
           <DailyAgendaView
             weekId={weekId}
-            selectedDay={selectedDay}
             tasks={scheduledTasks}
             categories={snapshot.categories}
             staff={snapshot.staff}
-            dailyNote={dailyNote}
-            onSelectDay={setSelectedDay}
+            dailyEvents={snapshot.dailyEvents}
             onDailyNoteChange={changeDailyNote}
             onAddTask={(task) => setTasks([...snapshot.tasks, task])}
             onToggleTask={toggleTask}
@@ -455,9 +453,10 @@ export default function App() {
         task={dialog.task}
         weekId={weekId}
         defaultDay={dialog.day}
+        defaultGeneralReminder={Boolean(dialog.generalReminder)}
         categories={snapshot.categories}
         staff={snapshot.staff}
-        onClose={() => setDialog({ open: false, day: dialog.day, task: null })}
+        onClose={() => setDialog({ open: false, day: dialog.day, task: null, generalReminder: false })}
         onSave={saveTask}
       />
     </div>
