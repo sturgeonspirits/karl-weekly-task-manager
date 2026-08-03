@@ -13,8 +13,14 @@
  * - KWTM_PRIVATE_SHEET_ID: optional; defaults to the sheet this script is bound to
  * - KWTM_STAFF_TODOS_SHEET_ID: optional fallback for the staff scheduler sheet ID
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
+ *
+ * Version:
+ * - KWTM_SCRIPT_VERSION 2026-08-03.1
+ * - Open the deployed web app URL in a browser to confirm the live script version.
  */
 
+var KWTM_SCRIPT_VERSION = "2026-08-03.1";
+var KWTM_SCRIPT_UPDATED_AT = "2026-08-03";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 
 var KWTM_TASK_HEADERS = [
@@ -69,6 +75,13 @@ function doPost(e) {
   var body = KWTM_parseBody_(e);
   if (body.app === "karl-weekly-task-manager") return KWTM_handleRequest_(body);
   return KWTM_json_({ ok: false, error: "Unknown app." });
+}
+
+function doGet() {
+  return KWTM_json_({
+    ok: true,
+    message: "Karl Weekly Task Manager sync bridge is deployed.",
+  });
 }
 
 function KWTM_handleRequest_(body) {
@@ -396,5 +409,8 @@ function KWTM_staffTodoPriorityForSheet_(priority) {
 }
 
 function KWTM_json_(payload) {
+  payload.app = payload.app || "karl-weekly-task-manager";
+  payload.version = KWTM_SCRIPT_VERSION;
+  payload.updatedAt = KWTM_SCRIPT_UPDATED_AT;
   return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
 }
