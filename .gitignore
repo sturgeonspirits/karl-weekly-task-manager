@@ -1,0 +1,9 @@
+.DS_Store
+dist
+node_modules
+.env
+.env.local
+.netlify
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
