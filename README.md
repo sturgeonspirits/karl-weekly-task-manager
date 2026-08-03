@@ -1,6 +1,6 @@
 # Karl Weekly Task Manager
 
-React/Vite app for weekly operations planning: task grid, daily agenda, staff scheduler, bills, carryover, and Google Sheets synchronization.
+React/Vite app for weekly operations planning: task grid, daily agenda, staff scheduler, bills, carryover, and Google Sheets autosync.
 
 The app reads from two workbook sources:
 
@@ -36,4 +36,24 @@ This app uses a Netlify Edge Function for HTTP Basic Auth. In Netlify, add these
 
 Do not add the password to this repository. If either variable is missing, the deployed site returns `503 Site access is not configured.`
 
-The app stores task data locally in the browser until Google Sheets OAuth is configured in the Sheets panel.
+### Google Sheets autosync
+
+The app autosyncs through a Netlify Function that calls an Apps Script web app attached to the private Karl task sheet. There is no in-browser Google OAuth client ID.
+
+1. Open the private Karl task sheet.
+2. Go to Extensions > Apps Script.
+3. Paste the contents of `apps-script/Code.gs`.
+4. In Apps Script project settings, add this script property:
+   - `KWTM_SYNC_TOKEN`
+5. Deploy the script as a web app:
+   - Execute as: Me
+   - Who has access: Anyone
+6. In Netlify, add these environment variables with the `Functions` scope:
+   - `APPS_SCRIPT_SYNC_URL`: the Apps Script `/exec` web app URL
+   - `APPS_SCRIPT_SYNC_TOKEN`: the same value as `KWTM_SYNC_TOKEN`
+
+Optional Apps Script properties:
+
+- `KWTM_PRIVATE_SHEET_ID`: defaults to the bound private sheet
+- `KWTM_STAFF_TODOS_SHEET_ID`: defaults to the staff scheduler sheet ID already in the app
+- `KWTM_PUBLIC_STAFF_SHEET_ID`: when set, autosync also updates the `Staff Schedule` tab in that public workbook

@@ -1,9 +1,8 @@
-import { ArrowRightLeft, BadgeDollarSign, CalendarDays, LayoutGrid, RotateCcw, Sheet, UsersRound } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ArrowRightLeft, BadgeDollarSign, CalendarDays, LayoutGrid, RotateCcw, UsersRound } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BillsView } from "./components/BillsView";
 import { DailyAgendaView } from "./components/DailyAgendaView";
 import { GeneralRemindersPanel } from "./components/GeneralRemindersPanel";
-import { SheetsSyncPanel } from "./components/SheetsSyncPanel";
 import { StaffSchedulerView } from "./components/StaffSchedulerView";
 import { TaskDialog } from "./components/TaskDialog";
 import { TransferPanel } from "./components/TransferPanel";
@@ -12,27 +11,26 @@ import { seedCategories } from "./data/seedData";
 import {
   DEFAULT_PRIVATE_SHEET_ID,
   DEFAULT_STAFF_TODOS_SHEET_ID,
-  extractSpreadsheetId,
-  pullOperationsSnapshot,
-  pullStaffSchedulingSnapshot,
-  pushOperationsSnapshot,
-  pushStaffSchedule,
-  requestSheetsAccessToken,
+  pullAppsScriptSnapshot,
+  pushAppsScriptOperations,
+  pushAppsScriptStaffSchedule,
+  pushAppsScriptStaffTodos,
+  type AppsScriptSyncConfig,
 } from "./lib/sheetsService";
 import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "./types";
 import { addDays, dateFromKey, dateKeyForWeekDay, deduplicateTasks, sanitizeDailyEvents, sanitizeTasks, toLocalDateKey, weekIdFromDate } from "./utils";
 
 const STORAGE_KEY = "karl-weekly-task-manager-v2";
-const CONFIG_KEY = "karl-weekly-task-manager-config-v2";
-
-type ActiveView = "weekly" | "daily" | "staff" | "bills" | "transfer" | "sync";
-type DialogState = { open: boolean; day: number; task?: Task | null; generalReminder?: boolean };
-type SyncConfig = {
-  privateSheetId: string;
-  staffTodosSheetId: string;
-  publicStaffSheetId: string;
-  clientId: string;
+const AUTO_PULL_MS = 60_000;
+const AUTO_SAVE_MS = 2_500;
+const SHEET_SYNC_CONFIG: AppsScriptSyncConfig = {
+  privateSheetId: DEFAULT_PRIVATE_SHEET_ID,
+  staffTodosSheetId: DEFAULT_STAFF_TODOS_SHEET_ID,
+  publicStaffSheetId: "",
 };
+
+type ActiveView = "weekly" | "daily" | "staff" | "bills" | "transfer";
+type DialogState = { open: boolean; day: number; task?: Task | null; generalReminder?: boolean };
 
 const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }> = [
   { id: "weekly", label: "Weekly", icon: LayoutGrid },
@@ -40,7 +38,6 @@ const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }
   { id: "staff", label: "Staff", icon: UsersRound },
   { id: "bills", label: "Bills", icon: BadgeDollarSign },
   { id: "transfer", label: "Transfer", icon: ArrowRightLeft },
-  { id: "sync", label: "Sync", icon: Sheet },
 ];
 
 function loadSnapshot(weekId: string): OperationsSnapshot {
@@ -68,50 +65,6 @@ function loadSnapshot(weekId: string): OperationsSnapshot {
   }
 }
 
-function loadConfig(): SyncConfig {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(CONFIG_KEY) || "{}") as Partial<SyncConfig>;
-    return {
-      privateSheetId: parsed.privateSheetId || DEFAULT_PRIVATE_SHEET_ID,
-      staffTodosSheetId: parsed.staffTodosSheetId || DEFAULT_STAFF_TODOS_SHEET_ID,
-      publicStaffSheetId: parsed.publicStaffSheetId || "",
-      clientId: parsed.clientId || "",
-    };
-  } catch {
-    return {
-      privateSheetId: DEFAULT_PRIVATE_SHEET_ID,
-      staffTodosSheetId: DEFAULT_STAFF_TODOS_SHEET_ID,
-      publicStaffSheetId: "",
-      clientId: "",
-    };
-  }
-}
-
-function mergeDailyEvents(...eventSets: DailyEvents[]): DailyEvents {
-  const merged: DailyEvents = {};
-  eventSets.forEach((events) => {
-    Object.entries(events).forEach(([key, value]) => {
-      const lines = String(value)
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-      const current = new Set((merged[key] || "").split("\n").filter(Boolean));
-      lines.forEach((line) => current.add(line));
-      merged[key] = Array.from(current).join("\n");
-    });
-  });
-  return sanitizeDailyEvents(merged);
-}
-
-function mergeStaff(primary: StaffMember[], secondary: StaffMember[]): StaffMember[] {
-  const byKey = new Map<string, StaffMember>();
-  [...primary, ...secondary].forEach((person) => {
-    const key = (person.email || person.name).toLowerCase();
-    if (!byKey.has(key)) byKey.set(key, person);
-  });
-  return Array.from(byKey.values());
-}
-
 export default function App() {
   const [weekId, setWeekId] = useState(() => weekIdFromDate(new Date()));
   const [activeView, setActiveView] = useState<ActiveView>("weekly");
@@ -119,18 +72,18 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [dialog, setDialog] = useState<DialogState>({ open: false, day: 1, task: null });
   const [snapshot, setSnapshot] = useState<OperationsSnapshot>(() => loadSnapshot(weekId));
-  const [syncConfig, setSyncConfig] = useState<SyncConfig>(() => loadConfig());
-  const [accessToken, setAccessToken] = useState("");
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
+  const autoPullStartedRef = useRef(false);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const syncReadyRef = useRef(false);
+  const syncInFlightRef = useRef(false);
+  const remoteSnapshotJsonRef = useRef("");
+  const lastSavedSnapshotJsonRef = useRef(JSON.stringify(snapshot));
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
   }, [snapshot]);
-
-  useEffect(() => {
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(syncConfig));
-  }, [syncConfig]);
 
   const scheduledTasks = useMemo(
     () => snapshot.tasks.filter((task) => !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate)),
@@ -238,80 +191,90 @@ export default function App() {
     });
   }
 
-  async function connectSheets() {
+  const pullSheets = useCallback(async (silent = false) => {
+    if (syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
     setSyncBusy(true);
-    setSyncStatus("Opening Google sign-in...");
+    if (!silent) setSyncStatus("Refreshing from Google Sheets...");
     try {
-      const token = await requestSheetsAccessToken(syncConfig.clientId);
-      setAccessToken(token);
-      setSyncStatus("Connected to Google Sheets.");
+      const nextSnapshot = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshot);
+      const snapshotJson = JSON.stringify(nextSnapshot);
+      remoteSnapshotJsonRef.current = snapshotJson;
+      lastSavedSnapshotJsonRef.current = snapshotJson;
+      syncReadyRef.current = true;
+      setSnapshot(nextSnapshot);
+      setSyncStatus(silent ? "Autosync refreshed from Sheets." : "Sheets refreshed.");
     } catch (error) {
-      setSyncStatus(error instanceof Error ? error.message : "Could not connect to Google Sheets.");
+      setSyncStatus(error instanceof Error ? error.message : "Autosync refresh failed.");
     } finally {
+      syncInFlightRef.current = false;
       setSyncBusy(false);
     }
-  }
+  }, [snapshot]);
 
-  async function pullSheets() {
-    if (!accessToken) return;
-    setSyncBusy(true);
-    setSyncStatus("Pulling private task workbook and staff todos...");
-    try {
-      const privateSnapshot = await pullOperationsSnapshot(extractSpreadsheetId(syncConfig.privateSheetId), accessToken, snapshot);
-      const staffSnapshot = syncConfig.staffTodosSheetId.trim()
-        ? await pullStaffSchedulingSnapshot(extractSpreadsheetId(syncConfig.staffTodosSheetId), accessToken)
-        : { tasks: [], dailyEvents: {}, staff: [] };
-
-      setSnapshot({
-        ...privateSnapshot,
-        tasks: deduplicateTasks(sanitizeTasks([...privateSnapshot.tasks, ...staffSnapshot.tasks])),
-        dailyEvents: mergeDailyEvents(privateSnapshot.dailyEvents, staffSnapshot.dailyEvents),
-        staff: mergeStaff(privateSnapshot.staff, staffSnapshot.staff),
-      });
-      setSyncStatus("Imported private tasks, staff/general todos, events, daily notes, categories, bills, and staff.");
-    } catch (error) {
-      setSyncStatus(error instanceof Error ? error.message : "Import failed.");
-    } finally {
-      setSyncBusy(false);
-    }
-  }
-
-  async function pushSheets() {
-    if (!accessToken) return;
-    setSyncBusy(true);
-    setSyncStatus("Pushing local operations data...");
-    try {
-      await pushOperationsSnapshot(extractSpreadsheetId(syncConfig.privateSheetId), accessToken, snapshot);
-      setSyncStatus("Private schedule workbook was overwritten with local data.");
-    } catch (error) {
-      setSyncStatus(error instanceof Error ? error.message : "Push failed.");
-    } finally {
-      setSyncBusy(false);
-    }
-  }
-
-  async function pushStaff() {
-    if (!accessToken) {
-      setSyncStatus("Connect to Google Sheets first.");
-      setActiveView("sync");
+  const autoSaveSnapshot = useCallback(async (snapshotToSave: OperationsSnapshot, snapshotJson: string) => {
+    if (syncInFlightRef.current) {
+      autoSaveTimerRef.current = window.setTimeout(() => autoSaveSnapshot(snapshotToSave, snapshotJson), AUTO_SAVE_MS);
       return;
     }
-    if (!syncConfig.publicStaffSheetId.trim()) {
-      setSyncStatus("Add a public staff sheet ID in Sheets settings.");
-      setActiveView("sync");
-      return;
-    }
+
+    syncInFlightRef.current = true;
     setSyncBusy(true);
-    setSyncStatus("Publishing staff schedule...");
+    setSyncStatus("Autosaving to Sheets...");
     try {
-      await pushStaffSchedule(extractSpreadsheetId(syncConfig.publicStaffSheetId), accessToken, weekId, scheduledTasks, snapshot.staff);
-      setSyncStatus("Public staff schedule was updated.");
+      const scheduledTasksForWeek = snapshotToSave.tasks.filter(
+        (task) => task.weekId === weekId && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate)
+      );
+      const staffTodos = snapshotToSave.tasks.filter((task) => task.source === "staff" || task.id.startsWith("staff-"));
+      await pushAppsScriptOperations(SHEET_SYNC_CONFIG, snapshotToSave);
+      await pushAppsScriptStaffTodos(SHEET_SYNC_CONFIG, staffTodos);
+      await pushAppsScriptStaffSchedule(SHEET_SYNC_CONFIG, weekId, scheduledTasksForWeek, snapshotToSave.staff);
+      lastSavedSnapshotJsonRef.current = snapshotJson;
+      setSyncStatus("Autosaved to Sheets.");
     } catch (error) {
-      setSyncStatus(error instanceof Error ? error.message : "Staff schedule push failed.");
+      setSyncStatus(error instanceof Error ? error.message : "Autosave failed.");
     } finally {
+      autoSaveTimerRef.current = null;
+      syncInFlightRef.current = false;
       setSyncBusy(false);
     }
-  }
+  }, [weekId]);
+
+  useEffect(() => {
+    if (autoPullStartedRef.current) return;
+    autoPullStartedRef.current = true;
+    void pullSheets();
+  }, [pullSheets]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState !== "visible" || autoSaveTimerRef.current) return;
+      void pullSheets(true);
+    }, AUTO_PULL_MS);
+    return () => window.clearInterval(interval);
+  }, [pullSheets]);
+
+  useEffect(() => {
+    const snapshotJson = JSON.stringify(snapshot);
+    if (remoteSnapshotJsonRef.current === snapshotJson) {
+      remoteSnapshotJsonRef.current = "";
+      return;
+    }
+    if (!syncReadyRef.current || lastSavedSnapshotJsonRef.current === snapshotJson) return;
+
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    setSyncStatus("Autosave queued...");
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      void autoSaveSnapshot(snapshot, snapshotJson);
+    }, AUTO_SAVE_MS);
+  }, [autoSaveSnapshot, snapshot]);
+
+  useEffect(
+    () => () => {
+      if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    },
+    []
+  );
 
   return (
     <div className="min-h-screen bg-mash text-ink">
@@ -325,11 +288,14 @@ export default function App() {
                 Weekly tasks, daily notes, staff shifts, bills, carryover, and Google Sheets sync in one operations desk.
               </p>
             </div>
-            <button className="btn-header" type="button" onClick={resetLocalData}>
-              <RotateCcw size={17} />
-              Clear App Cache
-            </button>
+            <div className="header-actions">
+              <button className="btn-header" type="button" onClick={resetLocalData} disabled={syncBusy}>
+                <RotateCcw size={17} />
+                Clear App Cache
+              </button>
+            </div>
           </div>
+          {syncStatus ? <p className="header-sync-status">{syncStatus}</p> : null}
 
           <nav className="app-nav" aria-label="Application views">
             {navItems.map((item) => {
@@ -416,10 +382,8 @@ export default function App() {
             weekId={weekId}
             tasks={staffSchedulerTasks}
             staff={snapshot.staff}
-            syncBusy={syncBusy}
             onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
             onToggleTask={toggleTask}
-            onPushStaffSchedule={pushStaff}
           />
         ) : null}
 
@@ -427,25 +391,6 @@ export default function App() {
 
         {activeView === "transfer" ? <TransferPanel weekId={weekId} tasks={scheduledTasks} onTransfer={transferTasks} /> : null}
 
-        {activeView === "sync" ? (
-          <SheetsSyncPanel
-            privateSheetId={syncConfig.privateSheetId}
-            staffTodosSheetId={syncConfig.staffTodosSheetId}
-            publicStaffSheetId={syncConfig.publicStaffSheetId}
-            clientId={syncConfig.clientId}
-            connected={Boolean(accessToken)}
-            busy={syncBusy}
-            status={syncStatus}
-            onPrivateSheetIdChange={(value) => setSyncConfig((current) => ({ ...current, privateSheetId: extractSpreadsheetId(value) }))}
-            onStaffTodosSheetIdChange={(value) => setSyncConfig((current) => ({ ...current, staffTodosSheetId: extractSpreadsheetId(value) }))}
-            onPublicStaffSheetIdChange={(value) => setSyncConfig((current) => ({ ...current, publicStaffSheetId: extractSpreadsheetId(value) }))}
-            onClientIdChange={(value) => setSyncConfig((current) => ({ ...current, clientId: value }))}
-            onConnect={connectSheets}
-            onPull={pullSheets}
-            onPush={pushSheets}
-            onPushStaff={pushStaff}
-          />
-        ) : null}
       </main>
 
       <TaskDialog

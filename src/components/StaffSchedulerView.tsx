@@ -1,4 +1,4 @@
-import { ClipboardList, Send, UsersRound } from "lucide-react";
+import { ClipboardList, UsersRound } from "lucide-react";
 import { useMemo } from "react";
 import type { StaffMember, Task } from "../types";
 import { DAY_NAMES } from "../utils";
@@ -8,20 +8,16 @@ type StaffSchedulerViewProps = {
   weekId: string;
   tasks: Task[];
   staff: StaffMember[];
-  syncBusy: boolean;
   onEditTask: (task: Task) => void;
   onToggleTask: (taskId: string) => void;
-  onPushStaffSchedule: () => void;
 };
 
 export function StaffSchedulerView({
   weekId,
   tasks,
   staff,
-  syncBusy,
   onEditTask,
   onToggleTask,
-  onPushStaffSchedule,
 }: StaffSchedulerViewProps) {
   const grouped = useMemo(() => {
     const groups = new Map<string, Task[]>();
@@ -58,10 +54,6 @@ export function StaffSchedulerView({
             Only rows imported from the Staff Scheduling workbook's Todos tab appear here.
           </p>
         </div>
-        <button className="btn-primary" type="button" onClick={onPushStaffSchedule} disabled={syncBusy}>
-          <Send size={17} />
-          Push Public Schedule
-        </button>
       </div>
 
       <div className="mt-5 grid gap-4">

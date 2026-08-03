@@ -15,30 +15,30 @@ import {
 
 export const DEFAULT_PRIVATE_SHEET_ID = "1NQKvTSWvpTZ3uRsYWMUPAdOa_bHvsp_VMpc7EX1c_tI";
 export const DEFAULT_STAFF_TODOS_SHEET_ID = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
-export const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+export const APPS_SCRIPT_SYNC_FUNCTION = "/.netlify/functions/sheets-sync";
 
-type TokenResponse = {
-  access_token?: string;
+export type AppsScriptSyncConfig = {
+  privateSheetId: string;
+  staffTodosSheetId: string;
+  publicStaffSheetId: string;
+};
+
+type AppsScriptRows = {
+  taskTab?: string;
+  tasks?: string[][];
+  dailyEvents?: string[][];
+  categories?: string[][];
+  bills?: string[][];
+  staff?: string[][];
+  todos?: string[][];
+};
+
+type AppsScriptPullResponse = {
+  ok?: boolean;
+  private?: AppsScriptRows;
+  staff?: AppsScriptRows;
   error?: string;
-  error_description?: string;
-};
-
-type TokenClient = {
-  requestAccessToken: (options?: { prompt?: string }) => void;
-};
-
-type GoogleWindow = Window & {
-  google?: {
-    accounts?: {
-      oauth2?: {
-        initTokenClient: (config: {
-          client_id: string;
-          scope: string;
-          callback: (response: TokenResponse) => void;
-        }) => TokenClient;
-      };
-    };
-  };
+  message?: string;
 };
 
 const TASK_HEADERS = [
@@ -76,57 +76,6 @@ const STAFF_SCHEDULE_HEADERS = [
   "priority",
   "completed",
 ];
-
-export function loadGoogleIdentityScript(): Promise<void> {
-  const googleWindow = window as GoogleWindow;
-  if (googleWindow.google?.accounts?.oauth2) return Promise.resolve();
-
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>("script[data-google-identity]");
-    if (existing) {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error("Google sign-in could not load.")), { once: true });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.dataset.googleIdentity = "true";
-    script.addEventListener("load", () => resolve(), { once: true });
-    script.addEventListener("error", () => reject(new Error("Google sign-in could not load.")), { once: true });
-    document.head.appendChild(script);
-  });
-}
-
-export async function requestSheetsAccessToken(clientId: string): Promise<string> {
-  if (!clientId.trim()) throw new Error("Add a Google OAuth client ID first.");
-  await loadGoogleIdentityScript();
-  const googleWindow = window as GoogleWindow;
-  const initTokenClient = googleWindow.google?.accounts?.oauth2?.initTokenClient;
-  if (!initTokenClient) throw new Error("Google sign-in is unavailable.");
-
-  return new Promise((resolve, reject) => {
-    const tokenClient = initTokenClient({
-      client_id: clientId.trim(),
-      scope: SHEETS_SCOPE,
-      callback: (response) => {
-        if (response.error) {
-          reject(new Error(response.error_description || response.error));
-          return;
-        }
-        if (!response.access_token) {
-          reject(new Error("No access token was returned."));
-          return;
-        }
-        resolve(response.access_token);
-      },
-    });
-
-    tokenClient.requestAccessToken({ prompt: "consent" });
-  });
-}
 
 async function sheetsFetch<T>(path: string, accessToken: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${path}`, {
@@ -405,6 +354,106 @@ function parseStaffRoster(rows: string[][]): StaffMember[] {
       email: row[0] || undefined,
       color: parseBoolean(row[2]) ? "violet" : "sky",
     }));
+}
+
+async function syncFunctionFetch<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+  const response = await fetch(APPS_SCRIPT_SYNC_FUNCTION, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, ...payload }),
+  });
+
+  const text = await response.text();
+  let data: { ok?: boolean; error?: string; message?: string };
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Sheet sync is not available from this local Vite server. Use the deployed Netlify site or run with Netlify Dev.");
+  }
+
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || data.message || response.statusText || "Sheet sync failed.");
+  }
+
+  return data as T;
+}
+
+function mergeDailyEventSets(...eventSets: DailyEvents[]): DailyEvents {
+  const merged: DailyEvents = {};
+  eventSets.forEach((events) => {
+    Object.entries(events).forEach(([key, value]) => {
+      const lines = String(value)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const current = new Set((merged[key] || "").split("\n").filter(Boolean));
+      lines.forEach((line) => current.add(line));
+      merged[key] = Array.from(current).join("\n");
+    });
+  });
+  return sanitizeDailyEvents(merged);
+}
+
+function mergeStaffLists(primary: StaffMember[], secondary: StaffMember[]): StaffMember[] {
+  const byKey = new Map<string, StaffMember>();
+  [...primary, ...secondary].forEach((person) => {
+    const key = (person.email || person.name).toLowerCase();
+    if (!byKey.has(key)) byKey.set(key, person);
+  });
+  return Array.from(byKey.values());
+}
+
+export async function pullAppsScriptSnapshot(
+  config: AppsScriptSyncConfig,
+  fallback: OperationsSnapshot
+): Promise<OperationsSnapshot> {
+  const data = await syncFunctionFetch<AppsScriptPullResponse>("pull", { config });
+  const privateRows = data.private || {};
+  const staffRows = data.staff || {};
+  const privateTaskRows = privateRows.tasks || [];
+  const privateTaskTab = String(privateRows.taskTab || "");
+
+  const privateSnapshot: OperationsSnapshot = {
+    tasks: privateTaskRows.length
+      ? deduplicateTasks(
+          sanitizeTasks(privateTaskTab.toLowerCase() === "todos" ? parseTodos(privateTaskRows) : parseTasks(privateTaskRows))
+        )
+      : fallback.tasks,
+    dailyEvents: privateRows.dailyEvents?.length ? parseDailyEvents(privateRows.dailyEvents) : fallback.dailyEvents,
+    categories: privateRows.categories?.length ? parseCategories(privateRows.categories) : fallback.categories,
+    bills: privateRows.bills?.length ? parseBills(privateRows.bills) : fallback.bills,
+    staff: privateRows.staff?.length ? parseStaff(privateRows.staff) : fallback.staff,
+  };
+
+  const staffSnapshot: Pick<OperationsSnapshot, "tasks" | "dailyEvents" | "staff"> = {
+    tasks: staffRows.todos?.length ? deduplicateTasks(sanitizeTasks(parseTodos(staffRows.todos))) : [],
+    dailyEvents: staffRows.dailyEvents?.length ? parseDailyEvents(staffRows.dailyEvents) : {},
+    staff: staffRows.staff?.length ? parseStaffRoster(staffRows.staff) : [],
+  };
+
+  return {
+    ...privateSnapshot,
+    tasks: deduplicateTasks(sanitizeTasks([...privateSnapshot.tasks, ...staffSnapshot.tasks])),
+    dailyEvents: mergeDailyEventSets(privateSnapshot.dailyEvents, staffSnapshot.dailyEvents),
+    staff: mergeStaffLists(privateSnapshot.staff, staffSnapshot.staff),
+  };
+}
+
+export async function pushAppsScriptOperations(config: AppsScriptSyncConfig, snapshot: OperationsSnapshot): Promise<void> {
+  await syncFunctionFetch("pushOperations", { config, snapshot });
+}
+
+export async function pushAppsScriptStaffTodos(config: AppsScriptSyncConfig, tasks: Task[]): Promise<void> {
+  await syncFunctionFetch("pushStaffTodos", { config, tasks });
+}
+
+export async function pushAppsScriptStaffSchedule(
+  config: AppsScriptSyncConfig,
+  weekId: string,
+  tasks: Task[],
+  staff: StaffMember[]
+): Promise<void> {
+  await syncFunctionFetch("pushStaffSchedule", { config, weekId, tasks, staff });
 }
 
 export async function pullOperationsSnapshot(

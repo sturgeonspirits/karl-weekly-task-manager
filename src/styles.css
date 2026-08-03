@@ -155,6 +155,23 @@
     color: var(--ss-black);
   }
 
+  .header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .header-sync-status {
+    align-self: flex-start;
+    border-radius: 999px;
+    border: 1px solid rgba(135, 166, 127, 0.34);
+    background: rgba(135, 166, 127, 0.12);
+    padding: 0.35rem 0.65rem;
+    color: #3f5d39;
+    font-size: 0.78rem;
+    font-weight: 800;
+  }
+
   .icon-button {
     display: inline-flex;
     align-items: center;
