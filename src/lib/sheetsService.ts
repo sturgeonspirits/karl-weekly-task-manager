@@ -9,9 +9,12 @@ import {
   parseBoolean,
   sanitizeDailyEvents,
   sanitizeTasks,
+  todayStr,
+  toLocalDateKey,
 } from "../utils";
 
 export const DEFAULT_PRIVATE_SHEET_ID = "1NQKvTSWvpTZ3uRsYWMUPAdOa_bHvsp_VMpc7EX1c_tI";
+export const DEFAULT_STAFF_TODOS_SHEET_ID = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 export const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 
 type TokenResponse = {
@@ -143,6 +146,12 @@ async function sheetsFetch<T>(path: string, accessToken: string, init?: RequestI
   return payload as T;
 }
 
+export function extractSpreadsheetId(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(/\/spreadsheets\/d\/([^/]+)/);
+  return match?.[1] || trimmed;
+}
+
 function quoteSheet(title: string): string {
   return `'${title.replace(/'/g, "''")}'`;
 }
@@ -223,6 +232,7 @@ function parseTasks(rows: string[][]): Task[] {
   return rows
     .slice(1)
     .filter((row) => !isInvalidTitle(row[1]))
+    .filter((row) => !String(row[0] || "").startsWith("auto-def-") && !String(row[9] || "").startsWith("def-"))
     .map((row) => {
       const repeatPattern: Task["repeatPattern"] =
         row[8] === "weekly" || row[8] === "biweekly" ? row[8] : "none";
@@ -248,16 +258,73 @@ function parseTasks(rows: string[][]): Task[] {
     .filter((task) => task.weekId);
 }
 
+function parseTodos(rows: string[][]): Task[] {
+  const todayKey = todayStr();
+  return rows
+    .slice(1)
+    .filter((row) => !isInvalidTitle(row[1]))
+    .map((row) => {
+      const completed = parseBoolean(row[3]);
+      const rawDate = /^\d{4}-\d{2}-\d{2}$/.test(row[8] || "") ? row[8] : String(row[5] || "").slice(0, 10);
+      const sourceDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : todayKey;
+      const taskDate = !completed && sourceDate < todayKey ? todayKey : sourceDate;
+      const date = new Date(`${taskDate}T12:00:00`);
+      const day = date.getDay();
+      const dayOfWeek = day === 0 ? 7 : day;
+      const monday = new Date(date);
+      monday.setDate(date.getDate() - dayOfWeek + 1);
+      const weekId = toLocalDateKey(monday);
+      const priority = String(row[13] || "").toLowerCase() === "high" ? "high" : "medium";
+      const descriptionParts = [
+        row[4] ? `Added by ${row[4]}` : "",
+        row[8] && row[8] !== taskDate ? `Original todo date: ${row[8]}` : "",
+        row[11] ? `Proof: ${row[11]}` : "",
+      ].filter(Boolean);
+
+      return {
+        id: row[0] ? `staff-${row[0]}` : crypto.randomUUID(),
+        title: row[1] || "",
+        description: ["Staff/general todo", ...descriptionParts].join(". "),
+        dayOfWeek,
+        completed,
+        priority,
+        category: row[2] || "Staff Todos",
+        weekId,
+        repeatsWeekly: false,
+        repeatPattern: "none",
+        originTaskId: row[12] || undefined,
+        deleted: false,
+        specificDate: taskDate,
+        updatedAt: Date.parse(row[7] || row[5] || "") || Date.now(),
+        assignee: row[10] || row[4] || undefined,
+        shiftHours: row[14] || undefined,
+      } satisfies Task;
+    });
+}
+
 function parseDailyEvents(rows: string[][]): DailyEvents {
   const events: DailyEvents = {};
   rows.slice(1).forEach((row) => {
     const rawKey = String(row[0] || "").trim();
     const note = String(row[1] || "").trim();
     if (!rawKey || !note) return;
-    const key = /^\d{4}-\d{2}-\d{2}-[1-7]$/.test(rawKey) ? rawKey : eventKeyFromIsoDate(rawKey);
+    const key = normalizeDailyEventKey(rawKey);
     if (key) events[key] = note;
   });
   return sanitizeDailyEvents(events);
+}
+
+function normalizeDailyEventKey(rawKey: string): string | null {
+  if (/^\d{4}-\d{2}-\d{2}-[1-7]$/.test(rawKey)) return rawKey;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawKey)) return eventKeyFromIsoDate(rawKey);
+
+  const usDate = rawKey.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!usDate) return null;
+
+  const [, month, day, year] = usDate;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+  if (Number.isNaN(date.getTime())) return null;
+  return eventKeyFromIsoDate(toLocalDateKey(date));
 }
 
 function parseCategories(rows: string[][]): CategoryOption[] {
@@ -272,18 +339,35 @@ function parseCategories(rows: string[][]): CategoryOption[] {
 }
 
 function parseBills(rows: string[][]): Bill[] {
+  const headers = (rows[0] || []).map((header) => String(header || "").trim().toLowerCase());
+  const indexOf = (name: string, fallback: number) => {
+    const index = headers.indexOf(name);
+    return index >= 0 ? index : fallback;
+  };
+  const idIndex = indexOf("id", 0);
+  const nameIndex = headers.includes("title") ? indexOf("title", 1) : indexOf("name", 1);
+  const amountIndex = indexOf("amount", 2);
+  const dueDateIndex = indexOf("duedate", 3);
+  const statusIndex = indexOf("status", 4);
+  const categoryIndex = indexOf("category", 5);
+  const recurringIndex = indexOf("recurring", 6);
+  const frequencyIndex = headers.indexOf("frequency");
+  const updatedAtIndex = indexOf("updatedat", 7);
+
   return rows
     .slice(1)
-    .filter((row) => row[1])
+    .filter((row) => row[nameIndex])
     .map((row) => ({
-      id: row[0] || crypto.randomUUID(),
-      name: row[1],
-      amount: Number(String(row[2] || "0").replace(/[$,]/g, "")) || 0,
-      dueDate: row[3] || "",
-      paid: parseBoolean(row[4]),
-      category: row[5] || undefined,
-      recurring: parseBoolean(row[6]),
-      updatedAt: Number(row[7] || Date.now()),
+      id: row[idIndex] || crypto.randomUUID(),
+      name: row[nameIndex],
+      amount: Number(String(row[amountIndex] || "0").replace(/[$,]/g, "")) || 0,
+      dueDate: row[dueDateIndex] || "",
+      paid: parseBoolean(row[statusIndex]) || String(row[statusIndex] || "").toLowerCase() === "paid",
+      category: row[categoryIndex] || undefined,
+      recurring:
+        parseBoolean(row[recurringIndex]) ||
+        (frequencyIndex >= 0 ? String(row[frequencyIndex] || "").toLowerCase() !== "one-time" : false),
+      updatedAt: Number(row[updatedAtIndex] || Date.now()),
     }))
     .filter((bill) => /^\d{4}-\d{2}-\d{2}$/.test(bill.dueDate));
 }
@@ -302,13 +386,26 @@ function parseStaff(rows: string[][]): StaffMember[] {
     }));
 }
 
+function parseStaffRoster(rows: string[][]): StaffMember[] {
+  return rows
+    .slice(1)
+    .filter((row) => row[1] || row[0])
+    .map((row, index) => ({
+      id: row[0] || `staff-roster-${index}`,
+      name: row[1] || row[0],
+      role: parseBoolean(row[2]) ? "Manager" : "Staff",
+      email: row[0] || undefined,
+      color: parseBoolean(row[2]) ? "violet" : "sky",
+    }));
+}
+
 export async function pullOperationsSnapshot(
   spreadsheetId: string,
   accessToken: string,
   fallback: OperationsSnapshot
 ): Promise<OperationsSnapshot> {
   const tabs = await getSheetTitles(spreadsheetId, accessToken);
-  const taskTab = pickTab(tabs, ["Todo", "Tasks"]);
+  const taskTab = pickTab(tabs, ["Todos", "Todo", "Tasks"]);
   const dailyTab = pickTab(tabs, ["Daily Notes", "Events", "Notes", "Daily Agenda"]);
   const categoryTab = pickTab(tabs, ["Categories"]);
   const billTab = pickTab(tabs, ["Bills", "Expenses"]);
@@ -323,11 +420,35 @@ export async function pullOperationsSnapshot(
   ]);
 
   return {
-    tasks: taskRows.length ? deduplicateTasks(sanitizeTasks(parseTasks(taskRows))) : fallback.tasks,
+    tasks: taskRows.length
+      ? deduplicateTasks(sanitizeTasks(taskTab?.toLowerCase() === "todos" ? parseTodos(taskRows) : parseTasks(taskRows)))
+      : fallback.tasks,
     dailyEvents: dailyRows.length ? parseDailyEvents(dailyRows) : fallback.dailyEvents,
     categories: categoryRows.length ? parseCategories(categoryRows) : fallback.categories,
     bills: billRows.length ? parseBills(billRows) : fallback.bills,
     staff: staffRows.length ? parseStaff(staffRows) : fallback.staff,
+  };
+}
+
+export async function pullStaffSchedulingSnapshot(
+  spreadsheetId: string,
+  accessToken: string
+): Promise<Pick<OperationsSnapshot, "tasks" | "dailyEvents" | "staff">> {
+  const tabs = await getSheetTitles(spreadsheetId, accessToken);
+  const todoTab = pickTab(tabs, ["Todos", "Todo"]);
+  const dailyTab = pickTab(tabs, ["DailyNotes", "Daily Notes", "Events", "Notes", "Daily Agenda"]);
+  const staffTab = pickTab(tabs, ["Staff", "Staff Members"]);
+
+  const [todoRows, dailyRows, staffRows] = await Promise.all([
+    todoTab ? readValues(spreadsheetId, accessToken, todoTab) : Promise.resolve([]),
+    dailyTab ? readValues(spreadsheetId, accessToken, dailyTab) : Promise.resolve([]),
+    staffTab ? readValues(spreadsheetId, accessToken, staffTab) : Promise.resolve([]),
+  ]);
+
+  return {
+    tasks: todoRows.length ? deduplicateTasks(sanitizeTasks(parseTodos(todoRows))) : [],
+    dailyEvents: dailyRows.length ? parseDailyEvents(dailyRows) : {},
+    staff: staffRows.length ? parseStaffRoster(staffRows) : [],
   };
 }
 

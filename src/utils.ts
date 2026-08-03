@@ -39,6 +39,10 @@ export function dateFromKey(dateKey: string): Date {
   return new Date(year, month - 1, day);
 }
 
+export function isIsoDateKey(value?: string): value is string {
+  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
+}
+
 export function dateKeyForWeekDay(weekId: string, dayOfWeek: number): string {
   return toLocalDateKey(addDays(dateFromKey(weekId), Math.max(1, Math.min(7, dayOfWeek)) - 1));
 }
@@ -100,15 +104,30 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
   return tasks
     .filter((task) => !isInvalidTitle(task.title))
     .filter((task) => !task.deleted)
-    .filter((task) => !isTaskBeforeToday(task, today))
-    .map((task) => ({
-      ...task,
-      dayOfWeek: Math.max(1, Math.min(7, Number(task.dayOfWeek) || 1)),
-      completed: Boolean(task.completed),
-      priority: normalizePriority(task.priority),
-      repeatPattern: task.repeatPattern || "none",
-      updatedAt: task.updatedAt || Date.now(),
-    }));
+    .map((task): Task | null => {
+      const specificDate = isIsoDateKey(task.specificDate) ? task.specificDate : undefined;
+      const weekId = isIsoDateKey(task.weekId) ? task.weekId : specificDate ? weekIdFromDate(dateFromKey(specificDate)) : "";
+      if (!weekId) return null;
+
+      let dayOfWeek = Math.max(1, Math.min(7, Number(task.dayOfWeek) || 1));
+      if (specificDate) {
+        const day = dateFromKey(specificDate).getDay();
+        dayOfWeek = day === 0 ? 7 : day;
+      }
+
+      return {
+        ...task,
+        weekId,
+        specificDate,
+        dayOfWeek,
+        completed: Boolean(task.completed),
+        priority: normalizePriority(task.priority),
+        repeatPattern: task.repeatPattern || "none",
+        updatedAt: task.updatedAt || Date.now(),
+      };
+    })
+    .filter((task): task is Task => task !== null)
+    .filter((task) => !isTaskBeforeToday(task, today) || !task.completed);
 }
 
 export function sanitizeDailyEvents(events: DailyEvents): DailyEvents {

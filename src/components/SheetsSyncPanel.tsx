@@ -1,15 +1,17 @@
 import { Cloud, Download, KeyRound, Send, Sheet, Upload } from "lucide-react";
 import { FormEvent, useState } from "react";
-import { DEFAULT_PRIVATE_SHEET_ID, SHEETS_SCOPE } from "../lib/sheetsService";
+import { DEFAULT_PRIVATE_SHEET_ID, DEFAULT_STAFF_TODOS_SHEET_ID, SHEETS_SCOPE } from "../lib/sheetsService";
 
 type SheetsSyncPanelProps = {
   privateSheetId: string;
+  staffTodosSheetId: string;
   publicStaffSheetId: string;
   clientId: string;
   connected: boolean;
   busy: boolean;
   status: string;
   onPrivateSheetIdChange: (value: string) => void;
+  onStaffTodosSheetIdChange: (value: string) => void;
   onPublicStaffSheetIdChange: (value: string) => void;
   onClientIdChange: (value: string) => void;
   onConnect: () => void;
@@ -20,12 +22,14 @@ type SheetsSyncPanelProps = {
 
 export function SheetsSyncPanel({
   privateSheetId,
+  staffTodosSheetId,
   publicStaffSheetId,
   clientId,
   connected,
   busy,
   status,
   onPrivateSheetIdChange,
+  onStaffTodosSheetIdChange,
   onPublicStaffSheetIdChange,
   onClientIdChange,
   onConnect,
@@ -45,7 +49,7 @@ export function SheetsSyncPanel({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="eyebrow">Google Sheets sync</p>
-          <h2 className="page-title">Private workbook and public staff sheet</h2>
+          <h2 className="page-title">Private tasks, staff todos, and daily notes</h2>
         </div>
         <div className="flex flex-wrap gap-2">
           <button className="btn-secondary" type="button" onClick={() => setExpanded((value) => !value)}>
@@ -70,8 +74,12 @@ export function SheetsSyncPanel({
             />
           </label>
           <label className="field-label">
-            <span>Private schedule sheet ID</span>
+            <span>Private task workbook URL or ID</span>
             <input value={privateSheetId} onChange={(event) => onPrivateSheetIdChange(event.target.value)} />
+          </label>
+          <label className="field-label">
+            <span>Staff/general todos workbook URL or ID</span>
+            <input value={staffTodosSheetId} onChange={(event) => onStaffTodosSheetIdChange(event.target.value)} />
           </label>
           <label className="field-label">
             <span>Public staff sheet ID</span>
@@ -87,7 +95,7 @@ export function SheetsSyncPanel({
         <button className="sync-action" type="button" onClick={onPull} disabled={!connected || busy}>
           <Download size={19} />
           <span>Pull / Import</span>
-          <small>Read all known tabs and merge clean records.</small>
+          <small>Read private Tasks/Events plus staff Todos/DailyNotes.</small>
         </button>
         <button className="sync-action" type="button" onClick={onPush} disabled={!connected || busy}>
           <Upload size={19} />
@@ -104,7 +112,11 @@ export function SheetsSyncPanel({
       <div className="mt-5 grid gap-3 text-sm text-slate-600 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="sync-meta">
           <Sheet size={17} />
-          <span className="truncate">Private: {privateSheetId || DEFAULT_PRIVATE_SHEET_ID}</span>
+          <span className="truncate">Private tasks: {privateSheetId || DEFAULT_PRIVATE_SHEET_ID}</span>
+        </div>
+        <div className="sync-meta">
+          <Sheet size={17} />
+          <span className="truncate">Staff todos: {staffTodosSheetId || DEFAULT_STAFF_TODOS_SHEET_ID}</span>
         </div>
         <div className="sync-meta">
           <Sheet size={17} />

@@ -19,7 +19,10 @@ import { WeeklyGrid } from "./components/WeeklyGrid";
 import { createSeedBills, createSeedDailyEvents, createSeedTasks, seedCategories, seedStaff } from "./data/seedData";
 import {
   DEFAULT_PRIVATE_SHEET_ID,
+  DEFAULT_STAFF_TODOS_SHEET_ID,
+  extractSpreadsheetId,
   pullOperationsSnapshot,
+  pullStaffSchedulingSnapshot,
   pushOperationsSnapshot,
   pushStaffSchedule,
   requestSheetsAccessToken,
@@ -27,13 +30,14 @@ import {
 import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "./types";
 import { addDays, dateFromKey, dateKeyForWeekDay, deduplicateTasks, sanitizeDailyEvents, sanitizeTasks, toLocalDateKey, weekIdFromDate } from "./utils";
 
-const STORAGE_KEY = "sturgeon-spirits-ops-v1";
-const CONFIG_KEY = "sturgeon-spirits-ops-config-v1";
+const STORAGE_KEY = "karl-weekly-task-manager-v2";
+const CONFIG_KEY = "karl-weekly-task-manager-config-v2";
 
 type ActiveView = "weekly" | "daily" | "staff" | "bills" | "transfer" | "sync";
 type DialogState = { open: boolean; day: number; task?: Task | null };
 type SyncConfig = {
   privateSheetId: string;
+  staffTodosSheetId: string;
   publicStaffSheetId: string;
   clientId: string;
 };
@@ -77,12 +81,43 @@ function loadConfig(): SyncConfig {
     const parsed = JSON.parse(localStorage.getItem(CONFIG_KEY) || "{}") as Partial<SyncConfig>;
     return {
       privateSheetId: parsed.privateSheetId || DEFAULT_PRIVATE_SHEET_ID,
+      staffTodosSheetId: parsed.staffTodosSheetId || DEFAULT_STAFF_TODOS_SHEET_ID,
       publicStaffSheetId: parsed.publicStaffSheetId || "",
       clientId: parsed.clientId || "",
     };
   } catch {
-    return { privateSheetId: DEFAULT_PRIVATE_SHEET_ID, publicStaffSheetId: "", clientId: "" };
+    return {
+      privateSheetId: DEFAULT_PRIVATE_SHEET_ID,
+      staffTodosSheetId: DEFAULT_STAFF_TODOS_SHEET_ID,
+      publicStaffSheetId: "",
+      clientId: "",
+    };
   }
+}
+
+function mergeDailyEvents(...eventSets: DailyEvents[]): DailyEvents {
+  const merged: DailyEvents = {};
+  eventSets.forEach((events) => {
+    Object.entries(events).forEach(([key, value]) => {
+      const lines = String(value)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const current = new Set((merged[key] || "").split("\n").filter(Boolean));
+      lines.forEach((line) => current.add(line));
+      merged[key] = Array.from(current).join("\n");
+    });
+  });
+  return sanitizeDailyEvents(merged);
+}
+
+function mergeStaff(primary: StaffMember[], secondary: StaffMember[]): StaffMember[] {
+  const byKey = new Map<string, StaffMember>();
+  [...primary, ...secondary].forEach((person) => {
+    const key = (person.email || person.name).toLowerCase();
+    if (!byKey.has(key)) byKey.set(key, person);
+  });
+  return Array.from(byKey.values());
 }
 
 export default function App() {
@@ -201,11 +236,20 @@ export default function App() {
   async function pullSheets() {
     if (!accessToken) return;
     setSyncBusy(true);
-    setSyncStatus("Pulling private schedule workbook...");
+    setSyncStatus("Pulling private task workbook and staff todos...");
     try {
-      const next = await pullOperationsSnapshot(syncConfig.privateSheetId, accessToken, snapshot);
-      setSnapshot(next);
-      setSyncStatus("Imported tasks, daily notes, categories, bills, and staff.");
+      const privateSnapshot = await pullOperationsSnapshot(extractSpreadsheetId(syncConfig.privateSheetId), accessToken, snapshot);
+      const staffSnapshot = syncConfig.staffTodosSheetId.trim()
+        ? await pullStaffSchedulingSnapshot(extractSpreadsheetId(syncConfig.staffTodosSheetId), accessToken)
+        : { tasks: [], dailyEvents: {}, staff: [] };
+
+      setSnapshot({
+        ...privateSnapshot,
+        tasks: deduplicateTasks(sanitizeTasks([...privateSnapshot.tasks, ...staffSnapshot.tasks])),
+        dailyEvents: mergeDailyEvents(privateSnapshot.dailyEvents, staffSnapshot.dailyEvents),
+        staff: mergeStaff(privateSnapshot.staff, staffSnapshot.staff),
+      });
+      setSyncStatus("Imported private tasks, staff/general todos, events, daily notes, categories, bills, and staff.");
     } catch (error) {
       setSyncStatus(error instanceof Error ? error.message : "Import failed.");
     } finally {
@@ -218,7 +262,7 @@ export default function App() {
     setSyncBusy(true);
     setSyncStatus("Pushing local operations data...");
     try {
-      await pushOperationsSnapshot(syncConfig.privateSheetId, accessToken, snapshot);
+      await pushOperationsSnapshot(extractSpreadsheetId(syncConfig.privateSheetId), accessToken, snapshot);
       setSyncStatus("Private schedule workbook was overwritten with local data.");
     } catch (error) {
       setSyncStatus(error instanceof Error ? error.message : "Push failed.");
@@ -241,7 +285,7 @@ export default function App() {
     setSyncBusy(true);
     setSyncStatus("Publishing staff schedule...");
     try {
-      await pushStaffSchedule(syncConfig.publicStaffSheetId, accessToken, weekId, snapshot.tasks, snapshot.staff);
+      await pushStaffSchedule(extractSpreadsheetId(syncConfig.publicStaffSheetId), accessToken, weekId, snapshot.tasks, snapshot.staff);
       setSyncStatus("Public staff schedule was updated.");
     } catch (error) {
       setSyncStatus(error instanceof Error ? error.message : "Staff schedule push failed.");
@@ -361,13 +405,15 @@ export default function App() {
         {activeView === "sync" ? (
           <SheetsSyncPanel
             privateSheetId={syncConfig.privateSheetId}
+            staffTodosSheetId={syncConfig.staffTodosSheetId}
             publicStaffSheetId={syncConfig.publicStaffSheetId}
             clientId={syncConfig.clientId}
             connected={Boolean(accessToken)}
             busy={syncBusy}
             status={syncStatus}
-            onPrivateSheetIdChange={(value) => setSyncConfig((current) => ({ ...current, privateSheetId: value }))}
-            onPublicStaffSheetIdChange={(value) => setSyncConfig((current) => ({ ...current, publicStaffSheetId: value }))}
+            onPrivateSheetIdChange={(value) => setSyncConfig((current) => ({ ...current, privateSheetId: extractSpreadsheetId(value) }))}
+            onStaffTodosSheetIdChange={(value) => setSyncConfig((current) => ({ ...current, staffTodosSheetId: extractSpreadsheetId(value) }))}
+            onPublicStaffSheetIdChange={(value) => setSyncConfig((current) => ({ ...current, publicStaffSheetId: extractSpreadsheetId(value) }))}
             onClientIdChange={(value) => setSyncConfig((current) => ({ ...current, clientId: value }))}
             onConnect={connectSheets}
             onPull={pullSheets}

@@ -1,146 +1,122 @@
 import type { Bill, CategoryOption, DailyEvents, StaffMember, Task } from "../types";
-import { addDays, dailyEventKey, dateKeyForWeekDay, makeId, toLocalDateKey } from "../utils";
+
+const CURRENT_WEEK_ID = "2026-08-03";
 
 export const seedCategories: CategoryOption[] = [
-  { id: "production", name: "Production", color: "emerald" },
-  { id: "distilling", name: "Distilling", color: "amber" },
-  { id: "maintenance", name: "Maintenance", color: "rose" },
-  { id: "front-of-house", name: "Front of House", color: "sky" },
-  { id: "compliance", name: "Compliance", color: "violet" },
-  { id: "admin", name: "Admin", color: "slate" },
+  { id: "admin", name: "admin", color: "slate" },
+  { id: "maintenance", name: "maintenance", color: "sky" },
+  { id: "sales", name: "sales", color: "violet" },
+  { id: "hospitality", name: "hospitality", color: "emerald" },
+  { id: "compliance", name: "compliance", color: "rose" },
+  { id: "production-sales", name: "Production/Sales", color: "amber" },
+  { id: "bar-prep", name: "Bar Prep", color: "emerald" },
+  { id: "cleaning", name: "Cleaning", color: "sky" },
+  { id: "shopping", name: "Shopping", color: "violet" },
 ];
 
 export const seedStaff: StaffMember[] = [
-  { id: "staff-ella", name: "Ella", role: "Production Lead", email: "ella@sturgeonspirits.com", color: "emerald" },
-  { id: "staff-marco", name: "Marco", role: "Distiller", email: "marco@sturgeonspirits.com", color: "amber" },
-  { id: "staff-jules", name: "Jules", role: "Tasting Room", email: "jules@sturgeonspirits.com", color: "sky" },
-  { id: "staff-nora", name: "Nora", role: "Operations", email: "nora@sturgeonspirits.com", color: "violet" },
+  { id: "karl@sturgeonspirits.com", name: "Karl Loewenstein", role: "Manager", email: "karl@sturgeonspirits.com", color: "violet" },
+  { id: "todd.mclean@sturgeonspirits.com", name: "Todd McLean", role: "Manager", email: "todd.mclean@sturgeonspirits.com", color: "violet" },
+  { id: "sophia@sturgeonspirits.com", name: "Sophia Norenberg", role: "Staff", email: "sophia@sturgeonspirits.com", color: "sky" },
+  { id: "tanya@sturgeonspirits.com", name: "Tanya Schmidt", role: "Manager", email: "tanya@sturgeonspirits.com", color: "violet" },
+  { id: "erika@sturgeonspirits.com", name: "Erika Joyce", role: "Staff", email: "erika@sturgeonspirits.com", color: "sky" },
+  { id: "natefaust18@gmail.com", name: "Nate Faust", role: "Staff", email: "natefaust18@gmail.com", color: "sky" },
+  { id: "abbenner81@yahoo.com", name: "Amanda Benner", role: "Staff", email: "abbenner81@yahoo.com", color: "sky" },
 ];
 
-export function createSeedTasks(weekId: string): Task[] {
+export function createSeedTasks(weekId = CURRENT_WEEK_ID): Task[] {
   return [
-    {
-      id: makeId("task"),
-      title: "Mash prep for rye run",
-      description: "Verify grain bill, water temp, and yeast inventory before milling.",
-      dayOfWeek: 1,
-      completed: false,
-      priority: "high",
-      category: "Production",
-      weekId,
-      repeatsWeekly: true,
-      repeatPattern: "weekly",
-      assignee: "Ella",
-      shiftHours: "8:00 AM - 2:00 PM",
-      updatedAt: Date.now(),
-    },
-    {
-      id: makeId("task"),
-      title: "Clean fermentation room drains",
-      description: "Log completed sanitation check for the weekly maintenance binder.",
-      dayOfWeek: 2,
-      completed: false,
-      priority: "medium",
-      category: "Maintenance",
-      weekId,
-      assignee: "Marco",
-      shiftHours: "10:00 AM - 12:00 PM",
-      updatedAt: Date.now(),
-    },
-    {
-      id: makeId("task"),
-      title: "Bottle batch SS-0826",
-      description: "Pull labels, inspect closures, and confirm case count after pack-off.",
-      dayOfWeek: 3,
-      completed: false,
-      priority: "high",
-      category: "Production",
-      weekId,
-      assignee: "Ella",
-      shiftHours: "9:00 AM - 5:00 PM",
-      updatedAt: Date.now(),
-    },
-    {
-      id: makeId("task"),
-      title: "Update excise record packet",
-      description: "Reconcile proof gallons and attach production notes.",
-      dayOfWeek: 4,
-      completed: false,
-      priority: "medium",
-      category: "Compliance",
-      weekId,
-      assignee: "Nora",
-      shiftHours: "1:00 PM - 4:00 PM",
-      updatedAt: Date.now(),
-    },
-    {
-      id: makeId("task"),
-      title: "Weekend tasting room setup",
-      description: "Stock glassware, garnish station, POS drawer, and sample bottles.",
-      dayOfWeek: 5,
-      completed: false,
-      priority: "low",
-      category: "Front of House",
-      weekId,
-      assignee: "Jules",
-      shiftHours: "2:00 PM - 9:00 PM",
-      updatedAt: Date.now(),
-    },
-    {
-      id: makeId("task"),
-      title: "Proof still safety inspection",
-      description: "Check seals, condenser flow, and emergency shutoff documentation.",
-      dayOfWeek: 6,
-      completed: false,
-      priority: "high",
-      category: "Distilling",
-      weekId,
-      assignee: "Marco",
-      shiftHours: "7:00 AM - 11:00 AM",
-      updatedAt: Date.now(),
-    },
-  ];
+    task("auto-wmxneg9-2026-08-03", "Clean Distillery", "hospitality", 1, "low"),
+    task("auto-ogd2pma-2026-08-03", "Empty Cash Drawer", "hospitality", 1, "high"),
+    task("auto-kjqx24f-2026-08-03", "Laundry", "maintenance", 1, "low"),
+    task("auto-tark0jj-2026-08-03", "Update website", "sales", 1, "low"),
+    task("auto-xi5inm8-2026-08-03", "Social media posts", "sales", 1, "low"),
+    task("auto-0iuz1a8-2026-08-03", "Tasting Room Open 4- 8 PM", "hospitality", 2, "medium"),
+    task("auto-t0lcxqc-2026-08-03", "Pay Staff", "admin", 2, "low"),
+    task("auto-7qtxqzt-2026-08-03", "Tasting Room Open 4-8", "hospitality", 3, "medium"),
+    task("auto-t0g0rsb-2026-08-03", "Water Plants", "maintenance", 3, "low"),
+    task("auto-j5r2wt7-2026-08-03", "Tasting Room Open 4 - 8 PM", "hospitality", 4, "low"),
+    task("auto-xmtqufo-2026-08-03", "Tasting Room Open 1 - 9 PM", "hospitality", 5, "low"),
+    task("staff-todo_1785186913713_2930", "Get hand soap for bathrooms", "Cleaning", 5, "medium", {
+      assignee: "todd.mclean@sturgeonspirits.com",
+      description: "Staff/general todo. Added by Karl Loewenstein.",
+      specificDate: "2026-08-07",
+    }),
+    task("auto-yi8eq1e-2026-08-03", "Tasting Room Open 1 - 9 PM", "hospitality", 6, "low"),
+    task("auto-4qkartx-2026-08-03", "Tasting Room Open 12-6 PM", "hospitality", 7, "low"),
+    task("staff-todo_1784651550639_4759", "bottle rhubarb gin", "Production/Sales", 1, "high", {
+      description: "Staff/general todo. Added by Karl Loewenstein. Original todo date: 2026-07-23.",
+      specificDate: "2026-08-03",
+    }),
+    task("staff-todo_1785778630720_7813", "can seltzers", "Production/Sales", 1, "medium", {
+      description: "Staff/general todo. Added by Karl Loewenstein.",
+      specificDate: "2026-08-03",
+    }),
+    task("staff-todo_1785778648092_7251", "bottle cherry vodka", "Production/Sales", 1, "medium", {
+      description: "Staff/general todo. Added by Karl Loewenstein.",
+      specificDate: "2026-08-03",
+    }),
+    task("staff-todo_1785778657961_7443", "make cranberry vodka", "Production/Sales", 1, "medium", {
+      description: "Staff/general todo. Added by Karl Loewenstein.",
+      specificDate: "2026-08-03",
+    }),
+  ].map((item) => ({ ...item, weekId }));
 }
 
 export function createSeedBills(): Bill[] {
-  const now = new Date();
   return [
     {
-      id: makeId("bill"),
-      name: "Glass bottle shipment",
-      amount: 1840,
-      dueDate: toLocalDateKey(addDays(now, 4)),
+      id: "bill-ozfap0z",
+      name: "New A/C",
+      amount: 3500,
+      dueDate: "2026-08-10",
       paid: false,
-      category: "Packaging",
+      category: "Equipment & Maintenance",
       recurring: false,
-      updatedAt: Date.now(),
+      updatedAt: 1785778951205,
     },
     {
-      id: makeId("bill"),
-      name: "Utilities",
-      amount: 620,
-      dueDate: toLocalDateKey(addDays(now, 8)),
+      id: "bill-xoeslgh",
+      name: "Berlin Packaging -- Bottles",
+      amount: 4750,
+      dueDate: "2026-08-10",
       paid: false,
-      category: "Facilities",
-      recurring: true,
-      updatedAt: Date.now(),
-    },
-    {
-      id: makeId("bill"),
-      name: "Label printer lease",
-      amount: 195,
-      dueDate: toLocalDateKey(addDays(now, 13)),
-      paid: true,
-      category: "Equipment",
-      recurring: true,
-      updatedAt: Date.now(),
+      category: "Ingredients & Supplies",
+      recurring: false,
+      updatedAt: 1785778916197,
     },
   ];
 }
 
-export function createSeedDailyEvents(weekId: string): DailyEvents {
+export function createSeedDailyEvents(weekId = CURRENT_WEEK_ID): DailyEvents {
   return {
-    [dailyEventKey(weekId, 1)]: "County buyer pickup window is 11:00 AM - 1:00 PM.",
-    [dailyEventKey(weekId, 3)]: `Batch SS-0826 uses bottles staged on ${dateKeyForWeekDay(weekId, 2)}.`,
+    [`${weekId}-3`]: "Trivia",
+    [`${weekId}-4`]: "Cribbage",
+    [`${weekId}-5`]: "Pizza with Amanda & Erin Krebs",
+    [`${weekId}-6`]: "Music -- Bob Campbell",
+    [`${weekId}-7`]: "Closed for an Engagement Party",
+  };
+}
+
+function task(
+  id: string,
+  title: string,
+  category: string,
+  dayOfWeek: number,
+  priority: Task["priority"],
+  overrides: Partial<Task> = {}
+): Task {
+  return {
+    id,
+    title,
+    category,
+    dayOfWeek,
+    completed: false,
+    priority,
+    weekId: CURRENT_WEEK_ID,
+    repeatsWeekly: false,
+    repeatPattern: "none",
+    updatedAt: 1785777602775,
+    ...overrides,
   };
 }

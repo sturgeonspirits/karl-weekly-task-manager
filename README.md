@@ -2,6 +2,11 @@
 
 React/Vite app for weekly operations planning: task grid, daily agenda, staff scheduler, bills, carryover, and Google Sheets synchronization.
 
+The app reads from two workbook sources:
+
+- Private task workbook: `Tasks`, `Events`, `Categories`, and `Bills`
+- Staff scheduling workbook: `Todos`, `DailyNotes`, and `Staff`
+
 ## Run Locally
 
 ```bash
