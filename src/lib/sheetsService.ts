@@ -192,6 +192,8 @@ function pickTab(tabs: string[], names: string[]): string | null {
 }
 
 function parseTasks(rows: string[][]): Task[] {
+  let lastScheduledWeekId = "";
+
   return rows
     .slice(1)
     .filter((row) => !isInvalidTitle(row[1]))
@@ -201,10 +203,13 @@ function parseTasks(rows: string[][]): Task[] {
       const repeatsWeekly = parseBoolean(row[7]);
       const repeatPattern: Task["repeatPattern"] =
         row[8] === "weekly" || row[8] === "biweekly" ? row[8] : repeatsWeekly ? "weekly" : "none";
-      const rawWeekId = isIsoDateKey(row[6]) ? row[6] : "";
+      const rawWeekCell = String(row[6] || "").trim();
+      const rawWeekId = isIsoDateKey(rawWeekCell) ? rawWeekCell : "";
+      if (rawWeekId) lastScheduledWeekId = rawWeekId;
       const reminderDate = isIsoDateKey(row[11]) ? row[11] : undefined;
-      const specificDate = rawWeekId ? dateKeyForWeekDay(rawWeekId, dayOfWeek) : undefined;
-      const weekId = rawWeekId;
+      const legacyNumericWeekValue = /^[1-7]$/.test(rawWeekCell);
+      const weekId = rawWeekId || (legacyNumericWeekValue ? lastScheduledWeekId : "");
+      const specificDate = weekId ? dateKeyForWeekDay(weekId, dayOfWeek) : undefined;
       return {
         id: row[0] || crypto.randomUUID(),
         title: row[1] || "",

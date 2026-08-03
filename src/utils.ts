@@ -250,7 +250,13 @@ export function deduplicateTasks(tasks: Task[]): Task[] {
     const stableId = task.originTaskId || task.id;
     const key = `${stableId}|${task.weekId}|${task.dayOfWeek}`;
     const existing = seen.get(key);
-    if (!existing || (task.updatedAt || 0) >= (existing.updatedAt || 0)) {
+    const taskIsCanonical = Boolean(task.weekId && task.id.endsWith(task.weekId));
+    const existingIsCanonical = Boolean(existing?.weekId && existing.id.endsWith(existing.weekId));
+    if (
+      !existing ||
+      (task.updatedAt || 0) > (existing.updatedAt || 0) ||
+      ((task.updatedAt || 0) === (existing.updatedAt || 0) && taskIsCanonical && !existingIsCanonical)
+    ) {
       seen.set(key, task);
     }
   }

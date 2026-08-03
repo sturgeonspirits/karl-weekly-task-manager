@@ -1,6 +1,7 @@
-import { ArrowRightLeft, BadgeDollarSign, CalendarDays, LayoutGrid, RotateCcw, UsersRound } from "lucide-react";
+import { ArrowRightLeft, BadgeDollarSign, CalendarDays, CheckCircle2, LayoutGrid, RotateCcw, UsersRound } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BillsView } from "./components/BillsView";
+import { CompletedTasksView } from "./components/CompletedTasksView";
 import { DailyAgendaView } from "./components/DailyAgendaView";
 import { GeneralRemindersPanel } from "./components/GeneralRemindersPanel";
 import { StaffSchedulerView } from "./components/StaffSchedulerView";
@@ -40,7 +41,7 @@ const SHEET_SYNC_CONFIG: AppsScriptSyncConfig = {
   publicStaffSheetId: "",
 };
 
-type ActiveView = "weekly" | "daily" | "staff" | "bills" | "transfer";
+type ActiveView = "weekly" | "daily" | "staff" | "bills" | "transfer" | "completed";
 type DialogState = { open: boolean; day: number; task?: Task | null; generalReminder?: boolean };
 
 const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }> = [
@@ -49,6 +50,7 @@ const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }
   { id: "staff", label: "Staff", icon: UsersRound },
   { id: "bills", label: "Bills", icon: BadgeDollarSign },
   { id: "transfer", label: "Transfer", icon: ArrowRightLeft },
+  { id: "completed", label: "Completed", icon: CheckCircle2 },
 ];
 
 function normalizeTasksForWeek(tasks: Task[], weekId: string): Task[] {
@@ -115,12 +117,13 @@ export default function App() {
     () => scheduledTasks.filter((task) => task.weekId === weekId),
     [scheduledTasks, weekId]
   );
+  const openScheduledTasks = useMemo(() => scheduledTasks.filter((task) => !task.completed), [scheduledTasks]);
   const generalReminderTasks = useMemo(
-    () => snapshot.tasks.filter((task) => task.source !== "staff" && task.isGeneralReminder && !task.deleted),
+    () => snapshot.tasks.filter((task) => task.source !== "staff" && task.isGeneralReminder && !task.deleted && !task.completed),
     [snapshot.tasks]
   );
   const staffSchedulerTasks = useMemo(
-    () => snapshot.tasks.filter((task) => task.source === "staff" || task.id.startsWith("staff-")),
+    () => snapshot.tasks.filter((task) => (task.source === "staff" || task.id.startsWith("staff-")) && !task.completed),
     [snapshot.tasks]
   );
   const visibleDailyEvents = useMemo(
@@ -130,7 +133,7 @@ export default function App() {
 
   const completed = activeWeekTasks.filter((task) => task.completed).length;
   const highPriority = activeWeekTasks.filter((task) => !task.completed && task.priority === "high").length;
-  const assigned = activeWeekTasks.filter((task) => task.assignee).length;
+  const assigned = activeWeekTasks.filter((task) => !task.completed && task.assignee).length;
   const outstandingBills = snapshot.bills.filter((bill) => !bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
 
   function setTasks(tasks: Task[]) {
@@ -388,7 +391,7 @@ export default function App() {
         {activeView === "weekly" ? (
           <WeeklyGrid
             weekId={weekId}
-            tasks={scheduledTasks}
+            tasks={openScheduledTasks}
             categories={snapshot.categories}
             staff={snapshot.staff}
             dailyEvents={visibleDailyEvents}
@@ -407,7 +410,7 @@ export default function App() {
         {activeView === "daily" ? (
           <DailyAgendaView
             weekId={weekId}
-            tasks={scheduledTasks}
+            tasks={openScheduledTasks}
             categories={snapshot.categories}
             staff={snapshot.staff}
             dailyEvents={visibleDailyEvents}
@@ -430,7 +433,16 @@ export default function App() {
 
         {activeView === "bills" ? <BillsView bills={snapshot.bills} onSaveBills={setBills} /> : null}
 
-        {activeView === "transfer" ? <TransferPanel weekId={weekId} tasks={scheduledTasks} onTransfer={transferTasks} /> : null}
+        {activeView === "transfer" ? <TransferPanel weekId={weekId} tasks={openScheduledTasks} onTransfer={transferTasks} /> : null}
+
+        {activeView === "completed" ? (
+          <CompletedTasksView
+            tasks={snapshot.tasks}
+            categories={snapshot.categories}
+            onToggleTask={toggleTask}
+            onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
+          />
+        ) : null}
 
       </main>
 
