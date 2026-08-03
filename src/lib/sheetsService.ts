@@ -4,6 +4,7 @@ import {
   deduplicateTasks,
   eventKeyFromIsoDate,
   isInvalidTitle,
+  isIsoDateKey,
   normalizePriority,
   parseBoolean,
   sanitizeDailyEvents,
@@ -60,9 +61,22 @@ const TASK_HEADERS = [
   "updatedAt",
 ];
 
-const DAILY_HEADERS = ["date", "text"];
+const DAILY_HEADERS = ["key", "text", "updatedAt"];
 const CATEGORY_HEADERS = ["id", "name", "color"];
-const BILL_HEADERS = ["id", "name", "amount", "dueDate", "paid", "category", "recurring", "updatedAt"];
+const BILL_HEADERS = [
+  "id",
+  "title",
+  "payee",
+  "amount",
+  "dueDate",
+  "frequency",
+  "category",
+  "status",
+  "autoPay",
+  "paymentAccount",
+  "notes",
+  "updatedAt",
+];
 const STAFF_HEADERS = ["id", "name", "role", "email", "phone", "color"];
 const STAFF_SCHEDULE_HEADERS = [
   "weekId",
@@ -178,38 +192,41 @@ function pickTab(tabs: string[], names: string[]): string | null {
 }
 
 function parseTasks(rows: string[][]): Task[] {
-  const fallbackWeekId = weekIdFromDate(new Date());
   return rows
     .slice(1)
     .filter((row) => !isInvalidTitle(row[1]))
     .filter((row) => !String(row[0] || "").startsWith("auto-def-") && !String(row[9] || "").startsWith("def-"))
     .map((row) => {
+      const dayOfWeek = Math.max(1, Math.min(7, Number(row[4] || 1)));
+      const repeatsWeekly = parseBoolean(row[7]);
       const repeatPattern: Task["repeatPattern"] =
-        row[8] === "weekly" || row[8] === "biweekly" ? row[8] : "none";
-      const specificDate = row[11] || undefined;
-      const weekId = row[6] || (specificDate ? weekIdFromDate(new Date(`${specificDate}T12:00:00`)) : fallbackWeekId);
+        row[8] === "weekly" || row[8] === "biweekly" ? row[8] : repeatsWeekly ? "weekly" : "none";
+      const rawWeekId = isIsoDateKey(row[6]) ? row[6] : "";
+      const explicitDate = isIsoDateKey(row[11]) ? row[11] : undefined;
+      const specificDate = explicitDate || (rawWeekId && repeatPattern !== "none" ? dateKeyForWeekDay(rawWeekId, dayOfWeek) : undefined);
+      const weekId = rawWeekId || (specificDate ? weekIdFromDate(new Date(`${specificDate}T12:00:00`)) : "");
       return {
         id: row[0] || crypto.randomUUID(),
         title: row[1] || "",
         category: row[2] || "Production",
         description: row[3] || "",
-        dayOfWeek: Number(row[4] || 1),
+        dayOfWeek,
         completed: parseBoolean(row[5]),
         weekId,
-        repeatsWeekly: parseBoolean(row[7]),
+        repeatsWeekly: repeatsWeekly || repeatPattern !== "none",
         repeatPattern,
         originTaskId: row[9] || undefined,
         deleted: parseBoolean(row[10]),
         specificDate,
+        specificDateWasExplicit: Boolean(explicitDate),
         assignee: row[12] || undefined,
         priority: normalizePriority(row[13]),
         shiftHours: row[14] || undefined,
         updatedAt: Number(row[15] || Date.now()),
         source: "private" as const,
-        isGeneralReminder: !specificDate,
+        isGeneralReminder: !specificDate && repeatPattern === "none",
       };
-    })
-    .filter((task) => task.weekId);
+    });
 }
 
 function parseTodos(rows: string[][]): Task[] {
@@ -228,7 +245,8 @@ function parseTodos(rows: string[][]): Task[] {
       const monday = new Date(date);
       monday.setDate(date.getDate() - dayOfWeek + 1);
       const weekId = toLocalDateKey(monday);
-      const priority = String(row[13] || "").toLowerCase() === "high" ? "high" : "medium";
+      const rawPriority = String(row[13] || "").toLowerCase();
+      const priority: Task["priority"] = rawPriority === "high" ? "high" : rawPriority === "low" ? "low" : "medium";
       const descriptionParts = [
         row[4] ? `Added by ${row[4]}` : "",
         row[8] && row[8] !== taskDate ? `Original todo date: ${row[8]}` : "",
@@ -303,29 +321,43 @@ function parseBills(rows: string[][]): Bill[] {
   };
   const idIndex = indexOf("id", 0);
   const nameIndex = headers.includes("title") ? indexOf("title", 1) : indexOf("name", 1);
-  const amountIndex = indexOf("amount", 2);
-  const dueDateIndex = indexOf("duedate", 3);
-  const statusIndex = indexOf("status", 4);
-  const categoryIndex = indexOf("category", 5);
-  const recurringIndex = indexOf("recurring", 6);
+  const payeeIndex = indexOf("payee", -1);
+  const amountIndex = indexOf("amount", headers.includes("title") ? 3 : 2);
+  const dueDateIndex = indexOf("duedate", headers.includes("title") ? 4 : 3);
   const frequencyIndex = headers.indexOf("frequency");
-  const updatedAtIndex = indexOf("updatedat", 7);
+  const categoryIndex = indexOf("category", headers.includes("title") ? 6 : 5);
+  const statusIndex = indexOf("status", headers.includes("title") ? 7 : 4);
+  const autoPayIndex = headers.indexOf("autopay");
+  const paymentAccountIndex = headers.indexOf("paymentaccount");
+  const notesIndex = headers.indexOf("notes");
+  const recurringIndex = indexOf("recurring", 6);
+  const updatedAtIndex = indexOf("updatedat", headers.includes("title") ? 11 : 7);
 
   return rows
     .slice(1)
     .filter((row) => row[nameIndex])
-    .map((row) => ({
-      id: row[idIndex] || crypto.randomUUID(),
-      name: row[nameIndex],
-      amount: Number(String(row[amountIndex] || "0").replace(/[$,]/g, "")) || 0,
-      dueDate: row[dueDateIndex] || "",
-      paid: parseBoolean(row[statusIndex]) || String(row[statusIndex] || "").toLowerCase() === "paid",
-      category: row[categoryIndex] || undefined,
-      recurring:
-        parseBoolean(row[recurringIndex]) ||
-        (frequencyIndex >= 0 ? String(row[frequencyIndex] || "").toLowerCase() !== "one-time" : false),
-      updatedAt: Number(row[updatedAtIndex] || Date.now()),
-    }))
+    .map((row) => {
+      const frequency = frequencyIndex >= 0 ? String(row[frequencyIndex] || "").trim() : "";
+      const status = String(row[statusIndex] || "").trim();
+      return {
+        id: row[idIndex] || crypto.randomUUID(),
+        name: row[nameIndex],
+        payee: payeeIndex >= 0 ? row[payeeIndex] || undefined : undefined,
+        amount: Number(String(row[amountIndex] || "0").replace(/[$,]/g, "")) || 0,
+        dueDate: row[dueDateIndex] || "",
+        paid: parseBoolean(status) || status.toLowerCase() === "paid",
+        category: row[categoryIndex] || undefined,
+        recurring:
+          parseBoolean(row[recurringIndex]) ||
+          (frequency ? frequency.toLowerCase() !== "one-time" : false),
+        frequency: frequency || undefined,
+        status: status || undefined,
+        autoPay: autoPayIndex >= 0 ? parseBoolean(row[autoPayIndex]) : undefined,
+        paymentAccount: paymentAccountIndex >= 0 ? row[paymentAccountIndex] || undefined : undefined,
+        notes: notesIndex >= 0 ? row[notesIndex] || undefined : undefined,
+        updatedAt: Number(row[updatedAtIndex] || Date.now()),
+      };
+    })
     .filter((bill) => /^\d{4}-\d{2}-\d{2}$/.test(bill.dueDate));
 }
 
@@ -401,6 +433,46 @@ function mergeStaffLists(primary: StaffMember[], secondary: StaffMember[]): Staf
     if (!byKey.has(key)) byKey.set(key, person);
   });
   return Array.from(byKey.values());
+}
+
+function taskSpecificDateForSheet(task: Task): string {
+  const derivedDate = task.weekId ? dateKeyForWeekDay(task.weekId, task.dayOfWeek) : "";
+  if (task.specificDateWasExplicit || !task.repeatsWeekly || task.specificDate !== derivedDate) return task.specificDate || "";
+  return "";
+}
+
+function billFrequencyForSheet(bill: Bill): string {
+  if (bill.frequency) return bill.frequency;
+  return bill.recurring ? "monthly" : "one-time";
+}
+
+function billStatusForSheet(bill: Bill): string {
+  if (bill.paid) return "paid";
+  if (bill.status && bill.status.toLowerCase() !== "paid") return bill.status;
+  return "upcoming";
+}
+
+function billRowForSheet(bill: Bill): unknown[] {
+  return [
+    bill.id,
+    bill.name,
+    bill.payee || "",
+    bill.amount,
+    bill.dueDate,
+    billFrequencyForSheet(bill),
+    bill.category || "",
+    billStatusForSheet(bill),
+    bill.autoPay ? "TRUE" : "FALSE",
+    bill.paymentAccount || "",
+    bill.notes || "",
+    bill.updatedAt || Date.now(),
+  ];
+}
+
+function dailyEventRows(events: DailyEvents): unknown[][] {
+  return Object.entries(events)
+    .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+    .map(([key, note]) => [key, note, Date.now()]);
 }
 
 export async function pullAppsScriptSnapshot(
@@ -531,7 +603,7 @@ export async function pushOperationsSnapshot(
           task.repeatPattern || "none",
           task.originTaskId || "",
           task.deleted ? "TRUE" : "FALSE",
-          task.specificDate || "",
+          taskSpecificDateForSheet(task),
           task.assignee || "",
           task.priority,
           task.shiftHours || "",
@@ -541,7 +613,7 @@ export async function pushOperationsSnapshot(
     },
     {
       name: "Events",
-      values: [DAILY_HEADERS, ...Object.entries(snapshot.dailyEvents).map(([key, note]) => [key, note])],
+      values: [DAILY_HEADERS, ...dailyEventRows(snapshot.dailyEvents)],
     },
     {
       name: "Categories",
@@ -551,30 +623,7 @@ export async function pushOperationsSnapshot(
       name: "Bills",
       values: [
         BILL_HEADERS,
-        ...snapshot.bills.map((bill) => [
-          bill.id,
-          bill.name,
-          bill.amount,
-          bill.dueDate,
-          bill.paid ? "TRUE" : "FALSE",
-          bill.category || "",
-          bill.recurring ? "TRUE" : "FALSE",
-          bill.updatedAt || Date.now(),
-        ]),
-      ],
-    },
-    {
-      name: "Staff",
-      values: [
-        STAFF_HEADERS,
-        ...snapshot.staff.map((person) => [
-          person.id,
-          person.name,
-          person.role,
-          person.email || "",
-          person.phone || "",
-          person.color || "slate",
-        ]),
+        ...snapshot.bills.map(billRowForSheet),
       ],
     },
   ]);

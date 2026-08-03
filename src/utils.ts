@@ -93,24 +93,99 @@ export function todayStr(): string {
 }
 
 export function isTaskBeforeToday(task: Task, today = todayStr()): boolean {
+  if (task.isGeneralReminder) return false;
   return getTaskDate(task) < today;
+}
+
+export function isRecurringTask(task: Task): boolean {
+  return Boolean(task.repeatsWeekly || task.repeatPattern === "weekly" || task.repeatPattern === "biweekly");
+}
+
+function normalizedRepeatPattern(task: Task): Task["repeatPattern"] {
+  if (task.repeatPattern === "weekly" || task.repeatPattern === "biweekly") return task.repeatPattern;
+  return task.repeatsWeekly ? "weekly" : "none";
+}
+
+function stableRecurringId(task: Task): string {
+  return task.originTaskId || task.id.replace(/^auto-/, "").replace(/-\d{4}-\d{2}-\d{2}$/, "");
+}
+
+function weekDistance(startWeekId: string, targetWeekId: string): number {
+  const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+  return Math.round((dateFromKey(targetWeekId).getTime() - dateFromKey(startWeekId).getTime()) / msPerWeek);
+}
+
+function recurringTaskFallsOnWeek(task: Task, targetWeekId: string): boolean {
+  if (!isRecurringTask(task) || !isIsoDateKey(task.weekId) || !isIsoDateKey(targetWeekId)) return false;
+  const distance = weekDistance(task.weekId, targetWeekId);
+  if (distance < 0) return false;
+  return task.repeatPattern === "biweekly" ? distance % 2 === 0 : true;
+}
+
+export function ensureRecurringTasksForWeek(tasks: Task[], targetWeekId: string): Task[] {
+  if (!isIsoDateKey(targetWeekId)) return tasks;
+
+  const existingKeys = new Set(tasks.map((task) => `${stableRecurringId(task)}|${task.weekId}|${task.dayOfWeek}`));
+  const templates = new Map<string, Task>();
+
+  tasks.forEach((task) => {
+    if (!recurringTaskFallsOnWeek(task, targetWeekId)) return;
+    const key = `${stableRecurringId(task)}|${task.dayOfWeek}`;
+    const existing = templates.get(key);
+    if (
+      !existing ||
+      task.weekId.localeCompare(existing.weekId) > 0 ||
+      (task.weekId === existing.weekId && (task.updatedAt || 0) > (existing.updatedAt || 0))
+    ) {
+      templates.set(key, task);
+    }
+  });
+
+  const generated = Array.from(templates.values())
+    .filter((task) => !existingKeys.has(`${stableRecurringId(task)}|${targetWeekId}|${task.dayOfWeek}`))
+    .map((task) => {
+      const originTaskId = stableRecurringId(task);
+      return {
+        ...task,
+        id: `auto-${originTaskId}-${targetWeekId}`,
+        weekId: targetWeekId,
+        completed: false,
+        deleted: false,
+        originTaskId,
+        specificDate: dateKeyForWeekDay(targetWeekId, task.dayOfWeek),
+        specificDateWasExplicit: false,
+        isGeneralReminder: false,
+        updatedAt: Date.now(),
+      };
+    });
+
+  return generated.length ? deduplicateTasks([...tasks, ...generated]) : tasks;
 }
 
 export function sanitizeTasks(tasks: Task[]): Task[] {
   const today = todayStr();
   return tasks
     .filter((task) => !isInvalidTitle(task.title))
-    .filter((task) => !task.deleted)
     .map((task): Task | null => {
-      const specificDate = isIsoDateKey(task.specificDate) ? task.specificDate : undefined;
-      const weekId = isIsoDateKey(task.weekId) ? task.weekId : specificDate ? weekIdFromDate(dateFromKey(specificDate)) : "";
-      if (!weekId) return null;
-
+      const source = task.source || (task.id.startsWith("staff-") ? "staff" : "private");
+      const repeatPattern = normalizedRepeatPattern(task);
+      const repeatsWeekly = Boolean(task.repeatsWeekly || repeatPattern !== "none");
+      const rawWeekId = isIsoDateKey(task.weekId) ? task.weekId : undefined;
       let dayOfWeek = Math.max(1, Math.min(7, Number(task.dayOfWeek) || 1));
+      let specificDate = isIsoDateKey(task.specificDate) ? task.specificDate : undefined;
+      const specificDateWasExplicit = Boolean(specificDate && task.specificDateWasExplicit !== false);
+
+      if (!specificDate && source === "private" && repeatsWeekly && rawWeekId) {
+        specificDate = dateKeyForWeekDay(rawWeekId, dayOfWeek);
+      }
+
       if (specificDate) {
         const day = dateFromKey(specificDate).getDay();
         dayOfWeek = day === 0 ? 7 : day;
       }
+
+      const weekId = rawWeekId || (specificDate ? weekIdFromDate(dateFromKey(specificDate)) : weekIdFromDate(new Date()));
+      const isGeneralReminder = source === "staff" ? false : Boolean(task.isGeneralReminder || (!specificDate && !repeatsWeekly));
 
       return {
         ...task,
@@ -119,14 +194,16 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
         dayOfWeek,
         completed: Boolean(task.completed),
         priority: normalizePriority(task.priority),
-        repeatPattern: task.repeatPattern || "none",
-        source: task.source || (task.id.startsWith("staff-") ? "staff" : "private"),
-        isGeneralReminder: task.source === "staff" || task.id.startsWith("staff-") ? false : Boolean(task.isGeneralReminder || !specificDate),
+        repeatsWeekly,
+        repeatPattern,
+        source,
+        isGeneralReminder,
+        specificDateWasExplicit,
         updatedAt: task.updatedAt || Date.now(),
       };
     })
     .filter((task): task is Task => task !== null)
-    .filter((task) => !isTaskBeforeToday(task, today) || !task.completed);
+    .filter((task) => task.deleted || task.isGeneralReminder || isRecurringTask(task) || !isTaskBeforeToday(task, today) || !task.completed);
 }
 
 export function sanitizeDailyEvents(events: DailyEvents): DailyEvents {

@@ -18,7 +18,17 @@ import {
   type AppsScriptSyncConfig,
 } from "./lib/sheetsService";
 import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "./types";
-import { addDays, dateFromKey, dateKeyForWeekDay, deduplicateTasks, sanitizeDailyEvents, sanitizeTasks, toLocalDateKey, weekIdFromDate } from "./utils";
+import {
+  addDays,
+  dateFromKey,
+  dateKeyForWeekDay,
+  deduplicateTasks,
+  ensureRecurringTasksForWeek,
+  sanitizeDailyEvents,
+  sanitizeTasks,
+  toLocalDateKey,
+  weekIdFromDate,
+} from "./utils";
 
 const STORAGE_KEY = "karl-weekly-task-manager-v2";
 const AUTO_PULL_MS = 60_000;
@@ -40,6 +50,15 @@ const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }
   { id: "transfer", label: "Transfer", icon: ArrowRightLeft },
 ];
 
+function normalizeTasksForWeek(tasks: Task[], weekId: string): Task[] {
+  return deduplicateTasks(ensureRecurringTasksForWeek(sanitizeTasks(tasks), weekId));
+}
+
+function sameTasks(left: Task[], right: Task[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((task, index) => JSON.stringify(task) === JSON.stringify(right[index]));
+}
+
 function loadSnapshot(weekId: string): OperationsSnapshot {
   const fallback: OperationsSnapshot = {
     tasks: [],
@@ -54,7 +73,7 @@ function loadSnapshot(weekId: string): OperationsSnapshot {
     if (!raw) return fallback;
     const parsed = JSON.parse(raw) as Partial<OperationsSnapshot>;
     return {
-      tasks: deduplicateTasks(sanitizeTasks(parsed.tasks || fallback.tasks)),
+      tasks: normalizeTasksForWeek(parsed.tasks || fallback.tasks, weekId),
       categories: parsed.categories?.length ? parsed.categories : fallback.categories,
       bills: parsed.bills?.length ? parsed.bills : fallback.bills,
       staff: parsed.staff?.length ? parsed.staff : fallback.staff,
@@ -108,7 +127,7 @@ export default function App() {
   const outstandingBills = snapshot.bills.filter((bill) => !bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
 
   function setTasks(tasks: Task[]) {
-    setSnapshot((current) => ({ ...current, tasks: deduplicateTasks(sanitizeTasks(tasks)) }));
+    setSnapshot((current) => ({ ...current, tasks: normalizeTasksForWeek(tasks, weekId) }));
   }
 
   function setBills(bills: Bill[]) {
@@ -126,6 +145,7 @@ export default function App() {
       ...task,
       source,
       specificDate,
+      specificDateWasExplicit: source === "staff" || task.isGeneralReminder ? false : Boolean(task.specificDateWasExplicit || !task.repeatsWeekly),
       isGeneralReminder: source === "staff" ? false : Boolean(task.isGeneralReminder || !specificDate),
     };
     const exists = snapshot.tasks.some((item) => item.id === normalizedTask.id);
@@ -150,6 +170,7 @@ export default function App() {
       completed: false,
       originTaskId: task.originTaskId || task.id,
       specificDate: dateKeyForWeekDay(nextWeekId, task.dayOfWeek),
+      specificDateWasExplicit: false,
       isGeneralReminder: false,
       updatedAt: Date.now(),
     };
@@ -173,6 +194,7 @@ export default function App() {
       ...tasks.map((task) => ({
         ...task,
         specificDate: dateKeyForWeekDay(weekId, task.dayOfWeek),
+        specificDateWasExplicit: false,
         isGeneralReminder: false,
       })),
     ]);
@@ -197,7 +219,8 @@ export default function App() {
     setSyncBusy(true);
     if (!silent) setSyncStatus("Refreshing from Google Sheets...");
     try {
-      const nextSnapshot = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshot);
+      const pulledSnapshot = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshot);
+      const nextSnapshot = { ...pulledSnapshot, tasks: normalizeTasksForWeek(pulledSnapshot.tasks, weekId) };
       const snapshotJson = JSON.stringify(nextSnapshot);
       remoteSnapshotJsonRef.current = snapshotJson;
       lastSavedSnapshotJsonRef.current = snapshotJson;
@@ -222,14 +245,16 @@ export default function App() {
     setSyncBusy(true);
     setSyncStatus("Autosaving to Sheets...");
     try {
-      const scheduledTasksForWeek = snapshotToSave.tasks.filter(
+      const snapshotForSave = { ...snapshotToSave, tasks: normalizeTasksForWeek(snapshotToSave.tasks, weekId) };
+      const normalizedSnapshotJson = JSON.stringify(snapshotForSave);
+      const scheduledTasksForWeek = snapshotForSave.tasks.filter(
         (task) => task.weekId === weekId && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate)
       );
-      const staffTodos = snapshotToSave.tasks.filter((task) => task.source === "staff" || task.id.startsWith("staff-"));
-      await pushAppsScriptOperations(SHEET_SYNC_CONFIG, snapshotToSave);
+      const staffTodos = snapshotForSave.tasks.filter((task) => task.source === "staff" || task.id.startsWith("staff-"));
+      await pushAppsScriptOperations(SHEET_SYNC_CONFIG, snapshotForSave);
       await pushAppsScriptStaffTodos(SHEET_SYNC_CONFIG, staffTodos);
-      await pushAppsScriptStaffSchedule(SHEET_SYNC_CONFIG, weekId, scheduledTasksForWeek, snapshotToSave.staff);
-      lastSavedSnapshotJsonRef.current = snapshotJson;
+      await pushAppsScriptStaffSchedule(SHEET_SYNC_CONFIG, weekId, scheduledTasksForWeek, snapshotForSave.staff);
+      lastSavedSnapshotJsonRef.current = normalizedSnapshotJson;
       setSyncStatus("Autosaved to Sheets.");
     } catch (error) {
       setSyncStatus(error instanceof Error ? error.message : "Autosave failed.");
@@ -245,6 +270,14 @@ export default function App() {
     autoPullStartedRef.current = true;
     void pullSheets();
   }, [pullSheets]);
+
+  useEffect(() => {
+    setSnapshot((current) => {
+      const tasks = normalizeTasksForWeek(current.tasks, weekId);
+      if (sameTasks(tasks, current.tasks)) return current;
+      return { ...current, tasks };
+    });
+  }, [weekId]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {

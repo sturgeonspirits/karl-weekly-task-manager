@@ -14,6 +14,7 @@ export interface Task {
   originTaskId?: string;
   deleted?: boolean;
   specificDate?: string;
+  specificDateWasExplicit?: boolean;
   updatedAt?: number;
   assignee?: string;
   shiftHours?: string;
@@ -30,11 +31,17 @@ export interface CategoryOption {
 export interface Bill {
   id: string;
   name: string;
+  payee?: string;
   amount: number;
   dueDate: string;
   paid: boolean;
   category?: string;
   recurring?: boolean;
+  frequency?: string;
+  status?: string;
+  autoPay?: boolean;
+  paymentAccount?: string;
+  notes?: string;
   updatedAt?: number;
 }
 

@@ -35,9 +35,22 @@ var KWTM_TASK_HEADERS = [
   "shiftHours",
   "updatedAt",
 ];
-var KWTM_DAILY_HEADERS = ["date", "text"];
+var KWTM_DAILY_HEADERS = ["key", "text", "updatedAt"];
 var KWTM_CATEGORY_HEADERS = ["id", "name", "color"];
-var KWTM_BILL_HEADERS = ["id", "name", "amount", "dueDate", "paid", "category", "recurring", "updatedAt"];
+var KWTM_BILL_HEADERS = [
+  "id",
+  "title",
+  "payee",
+  "amount",
+  "dueDate",
+  "frequency",
+  "category",
+  "status",
+  "autoPay",
+  "paymentAccount",
+  "notes",
+  "updatedAt",
+];
 var KWTM_STAFF_HEADERS = ["id", "name", "role", "email", "phone", "color"];
 var KWTM_STAFF_SCHEDULE_HEADERS = [
   "weekId",
@@ -207,7 +220,7 @@ function KWTM_writeOperations_(config, snapshot) {
           task.repeatPattern || "none",
           task.originTaskId || "",
           task.deleted ? "TRUE" : "FALSE",
-          task.specificDate || "",
+          KWTM_taskSpecificDateForSheet_(task),
           task.assignee || "",
           task.priority || "medium",
           task.shiftHours || "",
@@ -218,6 +231,7 @@ function KWTM_writeOperations_(config, snapshot) {
   );
 
   var dailyEvents = snapshot.dailyEvents || {};
+  var now = new Date().getTime();
   KWTM_overwriteRows_(
     ss,
     "Events",
@@ -225,7 +239,7 @@ function KWTM_writeOperations_(config, snapshot) {
       Object.keys(dailyEvents)
         .sort()
         .map(function (key) {
-          return [key, dailyEvents[key]];
+          return [key, dailyEvents[key], now];
         })
     )
   );
@@ -248,23 +262,17 @@ function KWTM_writeOperations_(config, snapshot) {
         return [
           bill.id || "",
           bill.name || "",
+          bill.payee || "",
           bill.amount || 0,
           bill.dueDate || "",
-          bill.paid ? "TRUE" : "FALSE",
+          KWTM_billFrequencyForSheet_(bill),
           bill.category || "",
-          bill.recurring ? "TRUE" : "FALSE",
+          KWTM_billStatusForSheet_(bill),
+          bill.autoPay ? "TRUE" : "FALSE",
+          bill.paymentAccount || "",
+          bill.notes || "",
           bill.updatedAt || new Date().getTime(),
         ];
-      })
-    )
-  );
-
-  KWTM_overwriteRows_(
-    ss,
-    "Staff",
-    [KWTM_STAFF_HEADERS].concat(
-      (snapshot.staff || []).map(function (person) {
-        return [person.id || "", person.name || "", person.role || "", person.email || "", person.phone || "", person.color || ""];
       })
     )
   );
@@ -334,7 +342,7 @@ function KWTM_patchStaffTodos_(config, tasks) {
     sheet.getRange(rowNumber, 4).setValue(task.completed ? "TRUE" : "FALSE");
     if (task.specificDate) sheet.getRange(rowNumber, 9).setValue(task.specificDate);
     sheet.getRange(rowNumber, 11).setValue(task.assignee || "");
-    sheet.getRange(rowNumber, 14).setValue(task.priority || "medium");
+    sheet.getRange(rowNumber, 14).setValue(KWTM_staffTodoPriorityForSheet_(task.priority));
     sheet.getRange(rowNumber, 15).setValue(task.shiftHours || "");
     updated += 1;
   });
@@ -364,6 +372,27 @@ function KWTM_dateForWeekDay_(weekId, dayOfWeek) {
   var date = new Date(parts[0], parts[1] - 1, parts[2]);
   date.setDate(date.getDate() + Math.max(1, Math.min(7, Number(dayOfWeek || 1))) - 1);
   return Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd");
+}
+
+function KWTM_taskSpecificDateForSheet_(task) {
+  var derivedDate = task.weekId ? KWTM_dateForWeekDay_(task.weekId, task.dayOfWeek) : "";
+  if (task.specificDateWasExplicit || !task.repeatsWeekly || task.specificDate !== derivedDate) return task.specificDate || "";
+  return "";
+}
+
+function KWTM_billFrequencyForSheet_(bill) {
+  if (bill.frequency) return bill.frequency;
+  return bill.recurring ? "monthly" : "one-time";
+}
+
+function KWTM_billStatusForSheet_(bill) {
+  if (bill.paid) return "paid";
+  if (bill.status && String(bill.status).toLowerCase() !== "paid") return bill.status;
+  return "upcoming";
+}
+
+function KWTM_staffTodoPriorityForSheet_(priority) {
+  return String(priority || "").toLowerCase() === "high" ? "high" : "normal";
 }
 
 function KWTM_json_(payload) {
