@@ -15,11 +15,11 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-08-03.1
+ * - KWTM_SCRIPT_VERSION 2026-08-03.2
  * - Open the deployed web app URL in a browser to confirm the live script version.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-08-03.1";
+var KWTM_SCRIPT_VERSION = "2026-08-03.2";
 var KWTM_SCRIPT_UPDATED_AT = "2026-08-03";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 
@@ -35,7 +35,7 @@ var KWTM_TASK_HEADERS = [
   "repeatPattern",
   "originTaskId",
   "deleted",
-  "specificDate",
+  "reminderDate",
   "assignee",
   "priority",
   "shiftHours",
@@ -233,7 +233,7 @@ function KWTM_writeOperations_(config, snapshot) {
           task.repeatPattern || "none",
           task.originTaskId || "",
           task.deleted ? "TRUE" : "FALSE",
-          KWTM_taskSpecificDateForSheet_(task),
+          KWTM_taskReminderDateForSheet_(task),
           task.assignee || "",
           task.priority || "medium",
           task.shiftHours || "",
@@ -387,10 +387,8 @@ function KWTM_dateForWeekDay_(weekId, dayOfWeek) {
   return Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd");
 }
 
-function KWTM_taskSpecificDateForSheet_(task) {
-  var derivedDate = task.weekId ? KWTM_dateForWeekDay_(task.weekId, task.dayOfWeek) : "";
-  if (task.specificDateWasExplicit || !task.repeatsWeekly || task.specificDate !== derivedDate) return task.specificDate || "";
-  return "";
+function KWTM_taskReminderDateForSheet_(task) {
+  return task.reminderDate || "";
 }
 
 function KWTM_billFrequencyForSheet_(bill) {

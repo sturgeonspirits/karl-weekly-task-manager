@@ -153,6 +153,7 @@ export function ensureRecurringTasksForWeek(tasks: Task[], targetWeekId: string)
         deleted: false,
         originTaskId,
         specificDate: dateKeyForWeekDay(targetWeekId, task.dayOfWeek),
+        reminderDate: undefined,
         specificDateWasExplicit: false,
         isGeneralReminder: false,
         updatedAt: Date.now(),
@@ -172,10 +173,13 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
       const repeatsWeekly = Boolean(task.repeatsWeekly || repeatPattern !== "none");
       const rawWeekId = isIsoDateKey(task.weekId) ? task.weekId : undefined;
       let dayOfWeek = Math.max(1, Math.min(7, Number(task.dayOfWeek) || 1));
-      let specificDate = isIsoDateKey(task.specificDate) ? task.specificDate : undefined;
-      const specificDateWasExplicit = Boolean(specificDate && task.specificDateWasExplicit !== false);
+      const importedSpecificDate = isIsoDateKey(task.specificDate) ? task.specificDate : undefined;
+      const reminderDate =
+        isIsoDateKey(task.reminderDate) ? task.reminderDate : source === "private" && !rawWeekId ? importedSpecificDate : undefined;
+      let specificDate = source === "private" ? undefined : importedSpecificDate;
+      const specificDateWasExplicit = false;
 
-      if (!specificDate && source === "private" && repeatsWeekly && rawWeekId) {
+      if (source === "private" && rawWeekId) {
         specificDate = dateKeyForWeekDay(rawWeekId, dayOfWeek);
       }
 
@@ -198,6 +202,7 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
         repeatPattern,
         source,
         isGeneralReminder,
+        reminderDate,
         specificDateWasExplicit,
         updatedAt: task.updatedAt || Date.now(),
       };

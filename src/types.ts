@@ -14,6 +14,7 @@ export interface Task {
   originTaskId?: string;
   deleted?: boolean;
   specificDate?: string;
+  reminderDate?: string;
   specificDateWasExplicit?: boolean;
   updatedAt?: number;
   assignee?: string;

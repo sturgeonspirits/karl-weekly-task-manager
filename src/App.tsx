@@ -152,7 +152,7 @@ export default function App() {
       ...task,
       source,
       specificDate,
-      specificDateWasExplicit: source === "staff" || task.isGeneralReminder ? false : Boolean(task.specificDateWasExplicit || !task.repeatsWeekly),
+      specificDateWasExplicit: false,
       isGeneralReminder: source === "staff" ? false : Boolean(task.isGeneralReminder || !specificDate),
     };
     const exists = snapshot.tasks.some((item) => item.id === normalizedTask.id);

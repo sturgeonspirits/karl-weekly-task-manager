@@ -52,6 +52,7 @@ export function GeneralRemindersPanel({ tasks, categories, onAddReminder, onTogg
             <div className="min-w-0">
               <h3 className="text-sm font-semibold leading-snug text-slate-950">{task.title}</h3>
               {task.description ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{task.description}</p> : null}
+              {task.reminderDate ? <p className="mt-1 text-xs font-semibold text-[#96321F]">Reminder: {task.reminderDate}</p> : null}
               <div className="mt-3 flex flex-wrap gap-2">
                 <span className={`badge ${priorityTone(task.priority)}`}>{priorityLabel(task.priority)}</span>
                 <span className={`badge ${categoryTone(task.category, categories)}`}>{task.category}</span>

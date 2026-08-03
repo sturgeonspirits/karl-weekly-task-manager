@@ -54,7 +54,7 @@ const TASK_HEADERS = [
   "repeatPattern",
   "originTaskId",
   "deleted",
-  "specificDate",
+  "reminderDate",
   "assignee",
   "priority",
   "shiftHours",
@@ -202,9 +202,9 @@ function parseTasks(rows: string[][]): Task[] {
       const repeatPattern: Task["repeatPattern"] =
         row[8] === "weekly" || row[8] === "biweekly" ? row[8] : repeatsWeekly ? "weekly" : "none";
       const rawWeekId = isIsoDateKey(row[6]) ? row[6] : "";
-      const explicitDate = isIsoDateKey(row[11]) ? row[11] : undefined;
-      const specificDate = explicitDate || (rawWeekId && repeatPattern !== "none" ? dateKeyForWeekDay(rawWeekId, dayOfWeek) : undefined);
-      const weekId = rawWeekId || (specificDate ? weekIdFromDate(new Date(`${specificDate}T12:00:00`)) : "");
+      const reminderDate = isIsoDateKey(row[11]) ? row[11] : undefined;
+      const specificDate = rawWeekId ? dateKeyForWeekDay(rawWeekId, dayOfWeek) : undefined;
+      const weekId = rawWeekId;
       return {
         id: row[0] || crypto.randomUUID(),
         title: row[1] || "",
@@ -218,7 +218,8 @@ function parseTasks(rows: string[][]): Task[] {
         originTaskId: row[9] || undefined,
         deleted: parseBoolean(row[10]),
         specificDate,
-        specificDateWasExplicit: Boolean(explicitDate),
+        reminderDate,
+        specificDateWasExplicit: false,
         assignee: row[12] || undefined,
         priority: normalizePriority(row[13]),
         shiftHours: row[14] || undefined,
@@ -435,10 +436,8 @@ function mergeStaffLists(primary: StaffMember[], secondary: StaffMember[]): Staf
   return Array.from(byKey.values());
 }
 
-function taskSpecificDateForSheet(task: Task): string {
-  const derivedDate = task.weekId ? dateKeyForWeekDay(task.weekId, task.dayOfWeek) : "";
-  if (task.specificDateWasExplicit || !task.repeatsWeekly || task.specificDate !== derivedDate) return task.specificDate || "";
-  return "";
+function taskReminderDateForSheet(task: Task): string {
+  return task.reminderDate || "";
 }
 
 function billFrequencyForSheet(bill: Bill): string {
@@ -604,7 +603,7 @@ export async function pushOperationsSnapshot(
           task.repeatPattern || "none",
           task.originTaskId || "",
           task.deleted ? "TRUE" : "FALSE",
-          taskSpecificDateForSheet(task),
+          taskReminderDateForSheet(task),
           task.assignee || "",
           task.priority,
           task.shiftHours || "",
