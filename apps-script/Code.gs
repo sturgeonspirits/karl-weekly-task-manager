@@ -15,11 +15,11 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-08-03.2
+ * - KWTM_SCRIPT_VERSION 2026-08-03.3
  * - Open the deployed web app URL in a browser to confirm the live script version.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-08-03.2";
+var KWTM_SCRIPT_VERSION = "2026-08-03.3";
 var KWTM_SCRIPT_UPDATED_AT = "2026-08-03";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 
@@ -210,7 +210,32 @@ function KWTM_readRows_(ss, tabName) {
   return sheet.getRange(1, 1, sheet.getLastRow(), Math.min(sheet.getLastColumn(), 26)).getDisplayValues();
 }
 
+function KWTM_hasTextRecordValues_(record) {
+  var source = record || {};
+  return Object.keys(source).some(function (key) {
+    return String(source[key] || "").trim();
+  });
+}
+
+function KWTM_isPrivateTask_(task) {
+  var source = task || {};
+  return source.source !== "staff" && !String(source.id || "").match(/^staff-/);
+}
+
+function KWTM_hasPrivateOperationsData_(snapshot) {
+  var source = snapshot || {};
+  return Boolean(
+    (source.tasks || []).some(KWTM_isPrivateTask_) ||
+      (source.bills || []).length ||
+      KWTM_hasTextRecordValues_(source.dailyEvents)
+  );
+}
+
 function KWTM_writeOperations_(config, snapshot) {
+  if (!KWTM_hasPrivateOperationsData_(snapshot)) {
+    throw new Error("Blocked unsafe empty sheet overwrite. Refresh from Google Sheets instead of saving an empty cache.");
+  }
+
   var ss = SpreadsheetApp.openById(KWTM_privateSheetId_(config));
   var tasks = (snapshot.tasks || []).filter(function (task) {
     return task.source !== "staff";

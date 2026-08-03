@@ -1,5 +1,19 @@
 const ALLOWED_ACTIONS = new Set(["pull", "pushOperations", "pushStaffTodos", "pushStaffSchedule"]);
 
+function hasTextRecordValues(record) {
+  return Object.values(record || {}).some((value) => String(value || "").trim());
+}
+
+function isPrivateTask(task = {}) {
+  return task.source !== "staff" && !String(task.id || "").startsWith("staff-");
+}
+
+function hasPrivateOperationsData(snapshot = {}) {
+  return Boolean(
+    snapshot.tasks?.some(isPrivateTask) || snapshot.bills?.length || hasTextRecordValues(snapshot.dailyEvents)
+  );
+}
+
 function json(statusCode, body) {
   return {
     statusCode,
@@ -34,6 +48,13 @@ export async function handler(event) {
 
   if (!ALLOWED_ACTIONS.has(payload.action)) {
     return json(400, { ok: false, error: "Unknown sync action." });
+  }
+
+  if (payload.action === "pushOperations" && !hasPrivateOperationsData(payload.snapshot)) {
+    return json(409, {
+      ok: false,
+      error: "Blocked unsafe empty sheet overwrite. Refresh from Google Sheets instead of saving an empty cache.",
+    });
   }
 
   try {

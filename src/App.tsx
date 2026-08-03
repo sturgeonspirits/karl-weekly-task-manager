@@ -62,6 +62,28 @@ function sameTasks(left: Task[], right: Task[]): boolean {
   return left.every((task, index) => JSON.stringify(task) === JSON.stringify(right[index]));
 }
 
+function hasTextRecordValues(record?: DailyEvents): boolean {
+  return Object.values(record || {}).some((value) => String(value || "").trim());
+}
+
+function hasAnySyncedData(snapshot: OperationsSnapshot): boolean {
+  return Boolean(
+    snapshot.tasks.length ||
+      snapshot.bills.length ||
+      snapshot.staff.length ||
+      hasTextRecordValues(snapshot.dailyEvents) ||
+      hasTextRecordValues(snapshot.staffDailyEvents)
+  );
+}
+
+function isPrivateTask(task: Task): boolean {
+  return task.source !== "staff" && !task.id.startsWith("staff-");
+}
+
+function hasPrivateOperationsData(snapshot: OperationsSnapshot): boolean {
+  return Boolean(snapshot.tasks.some(isPrivateTask) || snapshot.bills.length || hasTextRecordValues(snapshot.dailyEvents));
+}
+
 function shouldSoftDeleteTask(task: Task): boolean {
   return Boolean(
     task.source === "staff" ||
@@ -242,17 +264,15 @@ export default function App() {
   }
 
   function resetLocalData() {
-    if (!window.confirm("Clear this browser's cached app data? Google Sheets will not be changed.")) return;
-    const next = weekIdFromDate(new Date());
-    setWeekId(next);
-    setSnapshot({
-      tasks: [],
-      categories: seedCategories,
-      bills: [],
-      staff: [],
-      dailyEvents: {},
-      staffDailyEvents: {},
-    });
+    if (!window.confirm("Reload this app from Google Sheets? Local browser cache will be cleared, but nothing will be saved to Sheets.")) return;
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = null;
+    syncReadyRef.current = false;
+    remoteSnapshotJsonRef.current = "";
+    lastSavedSnapshotJsonRef.current = JSON.stringify(snapshot);
+    localStorage.removeItem(STORAGE_KEY);
+    setSyncStatus("Local cache cleared. Refreshing from Google Sheets...");
+    void pullSheets();
   }
 
   const pullSheets = useCallback(async (silent = false) => {
@@ -276,7 +296,7 @@ export default function App() {
       syncInFlightRef.current = false;
       setSyncBusy(false);
     }
-  }, [snapshot]);
+  }, [snapshot, weekId]);
 
   const autoSaveSnapshot = useCallback(async (snapshotToSave: OperationsSnapshot, snapshotJson: string) => {
     if (syncInFlightRef.current) {
@@ -290,11 +310,18 @@ export default function App() {
     try {
       const snapshotForSave = { ...snapshotToSave, tasks: normalizeTasksForWeek(snapshotToSave.tasks, weekId) };
       const normalizedSnapshotJson = JSON.stringify(snapshotForSave);
+      if (!hasAnySyncedData(snapshotForSave)) {
+        lastSavedSnapshotJsonRef.current = normalizedSnapshotJson;
+        setSyncStatus("Autosave blocked: empty cache was not written to Google Sheets.");
+        return;
+      }
       const scheduledTasksForWeek = snapshotForSave.tasks.filter(
         (task) => task.weekId === weekId && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate)
       );
       const staffTodos = snapshotForSave.tasks.filter((task) => task.source === "staff" || task.id.startsWith("staff-"));
-      await pushAppsScriptOperations(SHEET_SYNC_CONFIG, snapshotForSave);
+      if (hasPrivateOperationsData(snapshotForSave)) {
+        await pushAppsScriptOperations(SHEET_SYNC_CONFIG, snapshotForSave);
+      }
       await pushAppsScriptStaffTodos(SHEET_SYNC_CONFIG, staffTodos);
       await pushAppsScriptStaffSchedule(SHEET_SYNC_CONFIG, weekId, scheduledTasksForWeek, snapshotForSave.staff);
       lastSavedSnapshotJsonRef.current = normalizedSnapshotJson;
@@ -367,7 +394,7 @@ export default function App() {
             <div className="header-actions">
               <button className="btn-header" type="button" onClick={resetLocalData} disabled={syncBusy}>
                 <RotateCcw size={17} />
-                Clear App Cache
+                Reload From Sheets
               </button>
             </div>
           </div>
