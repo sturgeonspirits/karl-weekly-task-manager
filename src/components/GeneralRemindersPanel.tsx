@@ -1,6 +1,7 @@
 import { Bell, Pencil, Plus } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, Task } from "../types";
+import { compareTasksByPriority } from "../utils";
 import { categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 
 type GeneralRemindersPanelProps = {
@@ -13,11 +14,10 @@ type GeneralRemindersPanelProps = {
 
 export function GeneralRemindersPanel({ tasks, categories, onAddReminder, onToggleTask, onEditTask }: GeneralRemindersPanelProps) {
   const reminders = useMemo(() => {
-    const priorityOrder = { high: 0, medium: 1, low: 2 };
     return tasks
       .filter((task) => task.source !== "staff" && task.isGeneralReminder && !task.deleted)
       .slice()
-      .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority] || a.title.localeCompare(b.title));
+      .sort(compareTasksByPriority);
   }, [tasks]);
 
   return (

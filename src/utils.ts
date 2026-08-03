@@ -79,6 +79,16 @@ export function normalizePriority(value: unknown): Priority {
   return "medium";
 }
 
+export const PRIORITY_ORDER: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
+
+export function compareTasksByPriority(a: Task, b: Task): number {
+  if (a.completed !== b.completed) return Number(a.completed) - Number(b.completed);
+  if (PRIORITY_ORDER[a.priority] !== PRIORITY_ORDER[b.priority]) {
+    return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+  }
+  return a.title.localeCompare(b.title);
+}
+
 export function isInvalidTitle(value: unknown): boolean {
   const title = String(value ?? "").trim().toLowerCase();
   return !title || RESERVED_TITLES.has(title);

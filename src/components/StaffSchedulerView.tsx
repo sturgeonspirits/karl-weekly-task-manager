@@ -1,7 +1,7 @@
 import { ClipboardList, UsersRound } from "lucide-react";
 import { useMemo } from "react";
 import type { StaffMember, Task } from "../types";
-import { DAY_NAMES } from "../utils";
+import { compareTasksByPriority, DAY_NAMES } from "../utils";
 import { staffDot } from "../lib/ui";
 
 type StaffSchedulerViewProps = {
@@ -79,7 +79,10 @@ export function StaffSchedulerView({
                 <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {assigneeTasks
                     .slice()
-                    .sort((a, b) => a.dayOfWeek - b.dayOfWeek)
+                    .sort((a, b) => {
+                      if (a.dayOfWeek !== b.dayOfWeek) return a.dayOfWeek - b.dayOfWeek;
+                      return compareTasksByPriority(a, b);
+                    })
                     .map((task) => {
                       const taskDateLabel = task.specificDate ? `${DAY_NAMES[task.dayOfWeek - 1]} · ${task.specificDate}` : "No date";
                       return (

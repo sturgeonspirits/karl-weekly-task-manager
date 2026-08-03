@@ -1,7 +1,7 @@
 import { CalendarCheck, Plus } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import type { CategoryOption, DailyEvents, StaffMember, Task } from "../types";
-import { DAY_NAMES, dateKeyForWeekDay, formatLongDate, formatShortDate, makeId } from "../utils";
+import { compareTasksByPriority, DAY_NAMES, dateKeyForWeekDay, formatLongDate, formatShortDate, makeId } from "../utils";
 import { categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 
 type DailyAgendaViewProps = {
@@ -38,7 +38,6 @@ export function DailyAgendaView({
     [weekId]
   );
   const tasksByDay = useMemo(() => {
-    const priorityOrder = { high: 0, medium: 1, low: 2 };
     const groups = new Map<number, Task[]>();
 
     tasks
@@ -46,9 +45,7 @@ export function DailyAgendaView({
       .slice()
       .sort((a, b) => {
         if (a.dayOfWeek !== b.dayOfWeek) return a.dayOfWeek - b.dayOfWeek;
-        if (a.completed !== b.completed) return Number(a.completed) - Number(b.completed);
-        if (priorityOrder[a.priority] !== priorityOrder[b.priority]) return priorityOrder[a.priority] - priorityOrder[b.priority];
-        return a.title.localeCompare(b.title);
+        return compareTasksByPriority(a, b);
       })
       .forEach((task) => {
         groups.set(task.dayOfWeek, [...(groups.get(task.dayOfWeek) || []), task]);
