@@ -410,7 +410,7 @@ async function syncFunctionFetch<T>(action: string, payload: Record<string, unkn
   return data as T;
 }
 
-function mergeDailyEventSets(...eventSets: DailyEvents[]): DailyEvents {
+export function mergeDailyEventSets(...eventSets: DailyEvents[]): DailyEvents {
   const merged: DailyEvents = {};
   eventSets.forEach((events) => {
     Object.entries(events).forEach(([key, value]) => {
@@ -506,7 +506,8 @@ export async function pullAppsScriptSnapshot(
   return {
     ...privateSnapshot,
     tasks: deduplicateTasks(sanitizeTasks([...privateSnapshot.tasks, ...staffSnapshot.tasks])),
-    dailyEvents: mergeDailyEventSets(privateSnapshot.dailyEvents, staffSnapshot.dailyEvents),
+    dailyEvents: privateSnapshot.dailyEvents,
+    staffDailyEvents: staffSnapshot.dailyEvents,
     staff: mergeStaffLists(privateSnapshot.staff, staffSnapshot.staff),
   };
 }

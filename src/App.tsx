@@ -11,6 +11,7 @@ import { seedCategories } from "./data/seedData";
 import {
   DEFAULT_PRIVATE_SHEET_ID,
   DEFAULT_STAFF_TODOS_SHEET_ID,
+  mergeDailyEventSets,
   pullAppsScriptSnapshot,
   pushAppsScriptOperations,
   pushAppsScriptStaffSchedule,
@@ -66,6 +67,7 @@ function loadSnapshot(weekId: string): OperationsSnapshot {
     bills: [],
     staff: [],
     dailyEvents: {},
+    staffDailyEvents: {},
   };
 
   try {
@@ -78,6 +80,7 @@ function loadSnapshot(weekId: string): OperationsSnapshot {
       bills: parsed.bills?.length ? parsed.bills : fallback.bills,
       staff: parsed.staff?.length ? parsed.staff : fallback.staff,
       dailyEvents: sanitizeDailyEvents(parsed.dailyEvents || fallback.dailyEvents),
+      staffDailyEvents: sanitizeDailyEvents(parsed.staffDailyEvents || fallback.staffDailyEvents || {}),
     };
   } catch {
     return fallback;
@@ -119,6 +122,10 @@ export default function App() {
   const staffSchedulerTasks = useMemo(
     () => snapshot.tasks.filter((task) => task.source === "staff" || task.id.startsWith("staff-")),
     [snapshot.tasks]
+  );
+  const visibleDailyEvents = useMemo(
+    () => mergeDailyEventSets(snapshot.dailyEvents, snapshot.staffDailyEvents || {}),
+    [snapshot.dailyEvents, snapshot.staffDailyEvents]
   );
 
   const completed = activeWeekTasks.filter((task) => task.completed).length;
@@ -210,6 +217,7 @@ export default function App() {
       bills: [],
       staff: [],
       dailyEvents: {},
+      staffDailyEvents: {},
     });
   }
 
@@ -383,7 +391,7 @@ export default function App() {
             tasks={scheduledTasks}
             categories={snapshot.categories}
             staff={snapshot.staff}
-            dailyEvents={snapshot.dailyEvents}
+            dailyEvents={visibleDailyEvents}
             searchTerm={searchTerm}
             categoryFilter={categoryFilter}
             onSearch={setSearchTerm}
@@ -402,7 +410,7 @@ export default function App() {
             tasks={scheduledTasks}
             categories={snapshot.categories}
             staff={snapshot.staff}
-            dailyEvents={snapshot.dailyEvents}
+            dailyEvents={visibleDailyEvents}
             onDailyNoteChange={changeDailyNote}
             onAddTask={(task) => setTasks([...snapshot.tasks, task])}
             onToggleTask={toggleTask}

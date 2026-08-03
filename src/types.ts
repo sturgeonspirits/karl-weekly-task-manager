@@ -62,4 +62,5 @@ export interface OperationsSnapshot {
   bills: Bill[];
   staff: StaffMember[];
   dailyEvents: DailyEvents;
+  staffDailyEvents?: DailyEvents;
 }
