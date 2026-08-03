@@ -62,6 +62,18 @@ function sameTasks(left: Task[], right: Task[]): boolean {
   return left.every((task, index) => JSON.stringify(task) === JSON.stringify(right[index]));
 }
 
+function shouldSoftDeleteTask(task: Task): boolean {
+  return Boolean(
+    task.source === "staff" ||
+      task.id.startsWith("staff-") ||
+      task.originTaskId ||
+      task.repeatsWeekly ||
+      task.repeatPattern === "weekly" ||
+      task.repeatPattern === "biweekly" ||
+      task.repeatPattern === "monthly"
+  );
+}
+
 function loadSnapshot(weekId: string): OperationsSnapshot {
   const fallback: OperationsSnapshot = {
     tasks: [],
@@ -171,6 +183,25 @@ export default function App() {
     );
   }
 
+  function deleteTask(task: Task) {
+    if (!window.confirm(`Delete "${task.title}"?`)) return;
+    const softDelete = shouldSoftDeleteTask(task);
+    const deletedTasks = softDelete
+      ? snapshot.tasks.map((item) =>
+          item.id === task.id
+            ? {
+                ...item,
+                deleted: true,
+                completed: item.source === "staff" || item.id.startsWith("staff-") ? true : item.completed,
+                updatedAt: Date.now(),
+              }
+            : item
+        )
+      : snapshot.tasks.filter((item) => item.id !== task.id);
+    setTasks(deletedTasks);
+    setDialog({ open: false, day: task.dayOfWeek, task: null, generalReminder: false });
+  }
+
   function cloneTaskToNextWeek(task: Task) {
     const nextWeekId = toLocalDateKey(addDays(dateFromKey(task.weekId), 7));
     const clone: Task = {
@@ -233,11 +264,12 @@ export default function App() {
       const pulledSnapshot = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshot);
       const nextSnapshot = { ...pulledSnapshot, tasks: normalizeTasksForWeek(pulledSnapshot.tasks, weekId) };
       const snapshotJson = JSON.stringify(nextSnapshot);
-      remoteSnapshotJsonRef.current = snapshotJson;
-      lastSavedSnapshotJsonRef.current = snapshotJson;
+      const needsSheetRepair = nextSnapshot.tasks.some((task) => task.needsSheetRepair);
+      remoteSnapshotJsonRef.current = needsSheetRepair ? "" : snapshotJson;
+      lastSavedSnapshotJsonRef.current = needsSheetRepair ? "" : snapshotJson;
       syncReadyRef.current = true;
       setSnapshot(nextSnapshot);
-      setSyncStatus(silent ? "Autosync refreshed from Sheets." : "Sheets refreshed.");
+      setSyncStatus(needsSheetRepair ? "Sheets refreshed; cleanup queued." : silent ? "Autosync refreshed from Sheets." : "Sheets refreshed.");
     } catch (error) {
       setSyncStatus(error instanceof Error ? error.message : "Autosync refresh failed.");
     } finally {
@@ -456,6 +488,7 @@ export default function App() {
         staff={snapshot.staff}
         onClose={() => setDialog({ open: false, day: dialog.day, task: null, generalReminder: false })}
         onSave={saveTask}
+        onDelete={deleteTask}
       />
     </div>
   );

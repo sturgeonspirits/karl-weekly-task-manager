@@ -202,14 +202,16 @@ function parseTasks(rows: string[][]): Task[] {
       const dayOfWeek = Math.max(1, Math.min(7, Number(row[4] || 1)));
       const repeatsWeekly = parseBoolean(row[7]);
       const repeatPattern: Task["repeatPattern"] =
-        row[8] === "weekly" || row[8] === "biweekly" ? row[8] : repeatsWeekly ? "weekly" : "none";
+        row[8] === "weekly" || row[8] === "biweekly" || row[8] === "monthly" ? row[8] : repeatsWeekly ? "weekly" : "none";
       const rawWeekCell = String(row[6] || "").trim();
       const rawWeekId = isIsoDateKey(rawWeekCell) ? rawWeekCell : "";
       if (rawWeekId) lastScheduledWeekId = rawWeekId;
-      const reminderDate = isIsoDateKey(row[11]) ? row[11] : undefined;
+      const rawReminderCell = String(row[11] || "").trim();
+      const reminderDate = isIsoDateKey(rawReminderCell) ? rawReminderCell : undefined;
       const legacyNumericWeekValue = /^[1-7]$/.test(rawWeekCell);
       const weekId = rawWeekId || (legacyNumericWeekValue ? lastScheduledWeekId : "");
       const specificDate = weekId ? dateKeyForWeekDay(weekId, dayOfWeek) : undefined;
+      const needsSheetRepair = legacyNumericWeekValue || Boolean(rawReminderCell && !reminderDate);
       return {
         id: row[0] || crypto.randomUUID(),
         title: row[1] || "",
@@ -231,6 +233,7 @@ function parseTasks(rows: string[][]): Task[] {
         updatedAt: Number(row[15] || Date.now()),
         source: "private" as const,
         isGeneralReminder: !specificDate && repeatPattern === "none",
+        needsSheetRepair,
       };
     });
 }

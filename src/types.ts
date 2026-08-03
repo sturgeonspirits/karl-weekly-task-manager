@@ -1,4 +1,5 @@
 export type Priority = "low" | "medium" | "high";
+export type RepeatPattern = "weekly" | "biweekly" | "monthly" | "none";
 
 export interface Task {
   id: string;
@@ -10,7 +11,7 @@ export interface Task {
   category: string;
   weekId: string;
   repeatsWeekly?: boolean;
-  repeatPattern?: "weekly" | "biweekly" | "none";
+  repeatPattern?: RepeatPattern;
   originTaskId?: string;
   deleted?: boolean;
   specificDate?: string;
@@ -21,6 +22,7 @@ export interface Task {
   shiftHours?: string;
   source?: "private" | "staff";
   isGeneralReminder?: boolean;
+  needsSheetRepair?: boolean;
 }
 
 export interface CategoryOption {

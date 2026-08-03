@@ -108,11 +108,18 @@ export function isTaskBeforeToday(task: Task, today = todayStr()): boolean {
 }
 
 export function isRecurringTask(task: Task): boolean {
-  return Boolean(task.repeatsWeekly || task.repeatPattern === "weekly" || task.repeatPattern === "biweekly");
+  return Boolean(
+    task.repeatsWeekly ||
+      task.repeatPattern === "weekly" ||
+      task.repeatPattern === "biweekly" ||
+      task.repeatPattern === "monthly"
+  );
 }
 
 function normalizedRepeatPattern(task: Task): Task["repeatPattern"] {
-  if (task.repeatPattern === "weekly" || task.repeatPattern === "biweekly") return task.repeatPattern;
+  if (task.repeatPattern === "weekly" || task.repeatPattern === "biweekly" || task.repeatPattern === "monthly") {
+    return task.repeatPattern;
+  }
   return task.repeatsWeekly ? "weekly" : "none";
 }
 
@@ -125,11 +132,33 @@ function weekDistance(startWeekId: string, targetWeekId: string): number {
   return Math.round((dateFromKey(targetWeekId).getTime() - dateFromKey(startWeekId).getTime()) / msPerWeek);
 }
 
+function isLastWeekdayOfMonth(date: Date): boolean {
+  const nextWeek = addDays(date, 7);
+  return nextWeek.getMonth() !== date.getMonth();
+}
+
+function weekdayOrdinalInMonth(date: Date): number {
+  return Math.floor((date.getDate() - 1) / 7) + 1;
+}
+
+function monthlyTaskFallsOnWeek(task: Task, targetWeekId: string): boolean {
+  const anchorDate = dateFromKey(dateKeyForWeekDay(task.weekId, task.dayOfWeek));
+  const targetDate = dateFromKey(dateKeyForWeekDay(targetWeekId, task.dayOfWeek));
+  const monthDistance =
+    (targetDate.getFullYear() - anchorDate.getFullYear()) * 12 + targetDate.getMonth() - anchorDate.getMonth();
+
+  if (monthDistance < 0 || anchorDate.getDay() !== targetDate.getDay()) return false;
+  if (isLastWeekdayOfMonth(anchorDate)) return isLastWeekdayOfMonth(targetDate);
+  return weekdayOrdinalInMonth(anchorDate) === weekdayOrdinalInMonth(targetDate);
+}
+
 function recurringTaskFallsOnWeek(task: Task, targetWeekId: string): boolean {
   if (!isRecurringTask(task) || !isIsoDateKey(task.weekId) || !isIsoDateKey(targetWeekId)) return false;
   const distance = weekDistance(task.weekId, targetWeekId);
   if (distance < 0) return false;
-  return task.repeatPattern === "biweekly" ? distance % 2 === 0 : true;
+  if (task.repeatPattern === "biweekly") return distance % 2 === 0;
+  if (task.repeatPattern === "monthly") return monthlyTaskFallsOnWeek(task, targetWeekId);
+  return true;
 }
 
 export function ensureRecurringTasksForWeek(tasks: Task[], targetWeekId: string): Task[] {
@@ -214,6 +243,7 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
         isGeneralReminder,
         reminderDate,
         specificDateWasExplicit,
+        needsSheetRepair: Boolean(task.needsSheetRepair),
         updatedAt: task.updatedAt || Date.now(),
       };
     })

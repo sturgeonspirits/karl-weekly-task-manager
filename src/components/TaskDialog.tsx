@@ -1,7 +1,7 @@
-import { Save, X } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { CategoryOption, Priority, StaffMember, Task } from "../types";
-import { dateKeyForWeekDay, makeId } from "../utils";
+import { Save, Trash2, X } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import type { CategoryOption, Priority, RepeatPattern, StaffMember, Task } from "../types";
+import { dateFromKey, dateKeyForWeekDay, isIsoDateKey, makeId, weekIdFromDate } from "../utils";
 
 type TaskDialogProps = {
   open: boolean;
@@ -13,6 +13,7 @@ type TaskDialogProps = {
   staff: StaffMember[];
   onClose: () => void;
   onSave: (task: Task) => void;
+  onDelete?: (task: Task) => void;
 };
 
 type TaskForm = {
@@ -21,10 +22,11 @@ type TaskForm = {
   dayOfWeek: number;
   category: string;
   priority: Priority;
+  scheduledDate: string;
   assignee: string;
   shiftHours: string;
   repeatsWeekly: boolean;
-  repeatPattern: "weekly" | "biweekly" | "none";
+  repeatPattern: RepeatPattern;
   isGeneralReminder: boolean;
 };
 
@@ -35,18 +37,26 @@ function createForm(
   categories: CategoryOption[],
   defaultGeneralReminder = false
 ): TaskForm {
+  const isGeneralReminder = task?.source === "staff" ? false : Boolean(task?.isGeneralReminder || defaultGeneralReminder);
   return {
     title: task?.title || "",
     description: task?.description || "",
     dayOfWeek: task?.dayOfWeek || defaultDay,
     category: task?.category || categories[0]?.name || "Production",
     priority: task?.priority || "medium",
+    scheduledDate: isGeneralReminder ? "" : task?.specificDate || (task?.source === "staff" ? "" : dateKeyForWeekDay(task?.weekId || weekId, task?.dayOfWeek || defaultDay)),
     assignee: task?.assignee || "",
     shiftHours: task?.shiftHours || "",
-    repeatsWeekly: Boolean(task?.repeatsWeekly),
+    repeatsWeekly: Boolean(task?.repeatsWeekly || (task?.repeatPattern && task.repeatPattern !== "none")),
     repeatPattern: task?.repeatPattern || "none",
-    isGeneralReminder: task?.source === "staff" ? false : Boolean(task?.isGeneralReminder || defaultGeneralReminder),
+    isGeneralReminder,
   };
+}
+
+function dayOfWeekFromDateKey(dateKey: string, fallback: number): number {
+  if (!isIsoDateKey(dateKey)) return fallback;
+  const day = dateFromKey(dateKey).getDay();
+  return day === 0 ? 7 : day;
 }
 
 export function TaskDialog({
@@ -59,6 +69,7 @@ export function TaskDialog({
   staff,
   onClose,
   onSave,
+  onDelete,
 }: TaskDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [form, setForm] = useState<TaskForm>(() => createForm(task, weekId, defaultDay, categories, defaultGeneralReminder));
@@ -73,41 +84,61 @@ export function TaskDialog({
   }, [categories, defaultDay, defaultGeneralReminder, open, task, weekId]);
 
   const isEditing = Boolean(task);
-  const dayOptions = useMemo(() => [1, 2, 3, 4, 5, 6, 7], []);
-
   function update<K extends keyof TaskForm>(key: K, value: TaskForm[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateScheduledDate(value: string) {
+    setForm((current) => ({
+      ...current,
+      scheduledDate: value,
+      dayOfWeek: dayOfWeekFromDateKey(value, current.dayOfWeek),
+    }));
+  }
+
+  function updateGeneralReminder(value: boolean) {
+    setForm((current) => ({
+      ...current,
+      isGeneralReminder: value,
+      scheduledDate: value ? "" : current.scheduledDate || dateKeyForWeekDay(weekId, current.dayOfWeek),
+      repeatsWeekly: value ? false : current.repeatsWeekly,
+      repeatPattern: value ? "none" : current.repeatPattern,
+    }));
   }
 
   function submit(event: FormEvent) {
     event.preventDefault();
     const title = form.title.trim();
     if (!title) return;
+    const hasScheduledDate = isIsoDateKey(form.scheduledDate);
+    const scheduledDayOfWeek = dayOfWeekFromDateKey(form.scheduledDate, form.dayOfWeek);
+    const scheduledWeekId = hasScheduledDate ? weekIdFromDate(dateFromKey(form.scheduledDate)) : task?.weekId || weekId;
 
     onSave({
       ...task,
       id: task?.id || makeId("task"),
       title,
       description: form.description.trim(),
-      dayOfWeek: form.dayOfWeek,
+      dayOfWeek: scheduledDayOfWeek,
       completed: task?.completed || false,
       priority: form.priority,
       category: form.category,
-      weekId: task?.weekId || weekId,
+      weekId: scheduledWeekId,
       repeatsWeekly: form.isGeneralReminder ? false : form.repeatsWeekly,
       repeatPattern: form.isGeneralReminder || !form.repeatsWeekly ? "none" : form.repeatPattern,
       originTaskId: task?.originTaskId,
       deleted: task?.deleted,
-      specificDate:
-        form.isGeneralReminder || (task?.source === "staff" && !task.specificDate)
-          ? undefined
-          : dateKeyForWeekDay(task?.weekId || weekId, form.dayOfWeek),
+      specificDate: form.isGeneralReminder || !hasScheduledDate ? undefined : form.scheduledDate,
       updatedAt: Date.now(),
       assignee: form.assignee.trim() || undefined,
       shiftHours: form.shiftHours.trim() || undefined,
       source: task?.source || "private",
       isGeneralReminder: task?.source === "staff" ? false : form.isGeneralReminder,
     });
+  }
+
+  function handleDelete() {
+    if (task && onDelete) onDelete(task);
   }
 
   return (
@@ -143,7 +174,7 @@ export function TaskDialog({
                   type="checkbox"
                   className="h-4 w-4 rounded border-slate-300"
                   checked={form.isGeneralReminder}
-                  onChange={(event) => update("isGeneralReminder", event.target.checked)}
+                  onChange={(event) => updateGeneralReminder(event.target.checked)}
                 />
                 General reminder
               </label>
@@ -152,18 +183,13 @@ export function TaskDialog({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="field-label">
-              <span>Day</span>
-              <select
-                value={form.dayOfWeek}
+              <span>Date</span>
+              <input
+                type="date"
+                value={form.scheduledDate}
                 disabled={form.isGeneralReminder}
-                onChange={(event) => update("dayOfWeek", Number(event.target.value))}
-              >
-                {dayOptions.map((day) => (
-                  <option key={day} value={day}>
-                    {day}
-                  </option>
-                ))}
-              </select>
+                onChange={(event) => updateScheduledDate(event.target.value)}
+              />
             </label>
 
             <label className="field-label">
@@ -230,18 +256,29 @@ export function TaskDialog({
               <option value="none">None</option>
               <option value="weekly">Weekly</option>
               <option value="biweekly">Biweekly</option>
+              <option value="monthly">Monthly</option>
             </select>
           </div>
         </div>
 
-        <div className="mt-6 flex justify-end gap-3">
-          <button type="button" className="btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn-primary">
-            <Save size={17} />
-            Save
-          </button>
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          {isEditing && onDelete ? (
+            <button type="button" className="btn-secondary text-[#96321F]" onClick={handleDelete}>
+              <Trash2 size={17} />
+              Delete
+            </button>
+          ) : (
+            <span />
+          )}
+          <div className="flex justify-end gap-3">
+            <button type="button" className="btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary">
+              <Save size={17} />
+              Save
+            </button>
+          </div>
         </div>
       </form>
     </dialog>
