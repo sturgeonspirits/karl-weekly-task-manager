@@ -40,7 +40,7 @@ function createForm(
   defaultGeneralReminder = false
 ): TaskForm {
   const isGeneralReminder = task?.source === "staff" ? false : Boolean(task?.isGeneralReminder || defaultGeneralReminder);
-  const defaultAssignee = staff.some((person) => isKarlAssignee(person.name) || isKarlAssignee(person.email)) ? KARL_ASSIGNEE : KARL_ASSIGNEE;
+  const defaultAssignee = KARL_ASSIGNEE;
   return {
     title: task?.title || "",
     description: task?.description || "",
