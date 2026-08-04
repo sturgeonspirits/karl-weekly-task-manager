@@ -1,4 +1,5 @@
 import {
+  CalendarCheck,
   CalendarDays,
   CheckCircle2,
   ChevronLeft,
@@ -24,6 +25,7 @@ type WeeklyGridProps = {
   categoryFilter: string;
   onSearch: (value: string) => void;
   onCategoryFilter: (value: string) => void;
+  onDailyNoteChange: (key: string, value: string) => void;
   onWeekChange: (weekId: string) => void;
   onAddTask: (dayOfWeek: number) => void;
   onMoveEarlierTasks: () => void;
@@ -43,6 +45,7 @@ export function WeeklyGrid({
   categoryFilter,
   onSearch,
   onCategoryFilter,
+  onDailyNoteChange,
   onWeekChange,
   onAddTask,
   onMoveEarlierTasks,
@@ -169,11 +172,18 @@ export function WeeklyGrid({
                   </button>
                 </div>
 
-                {eventNote ? (
-                  <div className="weekly-event-note" title={eventNote}>
-                    {eventNote}
-                  </div>
-                ) : null}
+                <label className="weekly-event-field">
+                  <span>
+                    <CalendarCheck size={14} />
+                    Event
+                  </span>
+                  <input
+                    className="weekly-event-input"
+                    value={eventNote}
+                    onChange={(event) => onDailyNoteChange(day.dateKey, event.target.value)}
+                    placeholder="Add event note"
+                  />
+                </label>
 
                 <div className="mt-3 grid gap-3">
                   {dayTasks.map((task) => {

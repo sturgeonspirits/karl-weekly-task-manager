@@ -93,7 +93,8 @@ function isKarlVisibleTask(task: Task): boolean {
 }
 
 function shouldSendToStaffTodosSync(task: Task): boolean {
-  return Boolean(task.source === "staff" || task.id.startsWith("staff-") || (isPrivateTask(task) && task.assignee));
+  if (task.source === "staff" || task.id.startsWith("staff-")) return true;
+  return Boolean(isPrivateTask(task) && !task.isGeneralReminder && task.assignee && !isKarlAssignee(task.assignee));
 }
 
 function hasPrivateOperationsData(snapshot: OperationsSnapshot): boolean {
@@ -214,16 +215,22 @@ export default function App() {
 
   function saveTask(task: Task) {
     const source = task.source || (task.id.startsWith("staff-") ? "staff" : "private");
-    const specificDate = task.isGeneralReminder || (source === "staff" && !task.specificDate) ? undefined : task.specificDate;
+    const isGeneralReminder = source === "staff" ? false : Boolean(task.isGeneralReminder || !task.specificDate);
+    const specificDate = isGeneralReminder || (source === "staff" && !task.specificDate) ? undefined : task.specificDate;
     const normalizedTask: Task = {
       ...task,
       source,
       specificDate,
       specificDateWasExplicit: false,
-      isGeneralReminder: source === "staff" ? false : Boolean(task.isGeneralReminder || !specificDate),
+      repeatsWeekly: isGeneralReminder ? false : task.repeatsWeekly,
+      repeatPattern: isGeneralReminder ? "none" : task.repeatPattern || "none",
+      assignee: source === "private" ? task.assignee || undefined : task.assignee,
+      shiftHours: isGeneralReminder ? undefined : task.shiftHours,
+      isGeneralReminder,
     };
     const exists = snapshot.tasks.some((item) => item.id === normalizedTask.id);
     setTasks(exists ? snapshot.tasks.map((item) => (item.id === normalizedTask.id ? normalizedTask : item)) : [...snapshot.tasks, normalizedTask]);
+    setSyncStatus(syncReadyRef.current ? "Autosave queued..." : "Saved locally. Waiting for Sheets connection before autosave.");
     setDialog({ open: false, day: normalizedTask.dayOfWeek, task: null });
   }
 
@@ -519,6 +526,7 @@ export default function App() {
               categoryFilter={categoryFilter}
               onSearch={setSearchTerm}
               onCategoryFilter={setCategoryFilter}
+              onDailyNoteChange={changeDailyNote}
               onWeekChange={setWeekId}
               onAddTask={(day) => setDialog({ open: true, day, task: null })}
               onMoveEarlierTasks={moveEarlierOpenTasksToToday}
@@ -537,6 +545,7 @@ export default function App() {
               staff={snapshot.staff}
               dailyEvents={visibleDailyEvents}
               onDailyNoteChange={changeDailyNote}
+              onWeekChange={setWeekId}
               onAddTask={(day) => setDialog({ open: true, day, task: null })}
               onToggleTask={toggleTask}
               onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}

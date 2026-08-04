@@ -408,6 +408,7 @@ function parseStaffRoster(rows: string[][]): StaffMember[] {
 async function syncFunctionFetch<T>(action: string, payload: Record<string, unknown>): Promise<T> {
   const response = await fetch(APPS_SCRIPT_SYNC_FUNCTION, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, ...payload }),
   });
@@ -417,7 +418,11 @@ async function syncFunctionFetch<T>(action: string, payload: Record<string, unkn
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error("Sheet sync is not available from this local Vite server. Use the deployed Netlify site or run with Netlify Dev.");
+    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    if (isLocal) {
+      throw new Error("Sheet sync is not available from this local Vite server. Use the deployed Netlify site or run with Netlify Dev.");
+    }
+    throw new Error(`Sheet sync endpoint returned ${response.status || "a non-JSON response"}. Refresh the page and sign in again if prompted.`);
   }
 
   if (!response.ok || data.ok === false) {
@@ -453,7 +458,29 @@ function mergeStaffLists(primary: StaffMember[], secondary: StaffMember[]): Staf
 }
 
 function taskReminderDateForSheet(task: Task): string {
-  return task.reminderDate || "";
+  return task.isGeneralReminder ? "" : task.reminderDate || "";
+}
+
+function taskRowForSheet(task: Task): unknown[] {
+  const isGeneralReminder = Boolean(task.isGeneralReminder);
+  return [
+    task.id,
+    task.title,
+    task.category,
+    task.description || "",
+    isGeneralReminder ? "" : task.dayOfWeek,
+    task.completed ? "TRUE" : "FALSE",
+    isGeneralReminder ? "" : task.weekId,
+    isGeneralReminder ? "FALSE" : task.repeatsWeekly ? "TRUE" : "FALSE",
+    isGeneralReminder ? "none" : task.repeatPattern || "none",
+    task.originTaskId || "",
+    task.deleted ? "TRUE" : "FALSE",
+    taskReminderDateForSheet(task),
+    task.assignee || "",
+    task.priority,
+    isGeneralReminder ? "" : task.shiftHours || "",
+    task.updatedAt || Date.now(),
+  ];
 }
 
 function billFrequencyForSheet(bill: Bill): string {
@@ -607,24 +634,7 @@ export async function pushOperationsSnapshot(
       name: "Tasks",
       values: [
         TASK_HEADERS,
-        ...snapshot.tasks.filter((task) => task.source !== "staff").map((task) => [
-          task.id,
-          task.title,
-          task.category,
-          task.description || "",
-          task.dayOfWeek,
-          task.completed ? "TRUE" : "FALSE",
-          task.weekId,
-          task.repeatsWeekly ? "TRUE" : "FALSE",
-          task.repeatPattern || "none",
-          task.originTaskId || "",
-          task.deleted ? "TRUE" : "FALSE",
-          taskReminderDateForSheet(task),
-          task.assignee || "",
-          task.priority,
-          task.shiftHours || "",
-          task.updatedAt || Date.now(),
-        ]),
+        ...snapshot.tasks.filter((task) => task.source !== "staff").map(taskRowForSheet),
       ],
     },
     {

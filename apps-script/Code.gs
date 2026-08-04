@@ -1,4 +1,4 @@
-// KWTM_SCRIPT_VERSION: 2026-08-04.2
+// KWTM_SCRIPT_VERSION: 2026-08-04.3
 // KWTM_SCRIPT_UPDATED_AT: 2026-08-04
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
@@ -19,12 +19,12 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-08-04.2
+ * - KWTM_SCRIPT_VERSION 2026-08-04.3
  * - KWTM_SCRIPT_UPDATED_AT 2026-08-04
  * - Open the deployed web app URL in a browser to confirm the live script version.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-08-04.2";
+var KWTM_SCRIPT_VERSION = "2026-08-04.3";
 var KWTM_SCRIPT_UPDATED_AT = "2026-08-04";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 
@@ -265,11 +265,11 @@ function KWTM_writeOperations_(config, snapshot) {
           task.title || "",
           task.category || "",
           task.description || "",
-          task.dayOfWeek || "",
+          KWTM_taskDayOfWeekForSheet_(task),
           task.completed ? "TRUE" : "FALSE",
-          task.weekId || "",
-          task.repeatsWeekly ? "TRUE" : "FALSE",
-          task.repeatPattern || "none",
+          KWTM_taskWeekIdForSheet_(task),
+          KWTM_taskRepeatsWeeklyForSheet_(task),
+          KWTM_taskRepeatPatternForSheet_(task),
           task.originTaskId || "",
           task.deleted ? "TRUE" : "FALSE",
           KWTM_taskReminderDateForSheet_(task),
@@ -559,7 +559,28 @@ function KWTM_dateForWeekDay_(weekId, dayOfWeek) {
 }
 
 function KWTM_taskReminderDateForSheet_(task) {
+  if (task && task.isGeneralReminder) return "";
   return task.reminderDate || "";
+}
+
+function KWTM_taskDayOfWeekForSheet_(task) {
+  if (task && task.isGeneralReminder) return "";
+  return task.dayOfWeek || "";
+}
+
+function KWTM_taskWeekIdForSheet_(task) {
+  if (task && task.isGeneralReminder) return "";
+  return task.weekId || "";
+}
+
+function KWTM_taskRepeatsWeeklyForSheet_(task) {
+  if (task && task.isGeneralReminder) return "FALSE";
+  return task && task.repeatsWeekly ? "TRUE" : "FALSE";
+}
+
+function KWTM_taskRepeatPatternForSheet_(task) {
+  if (task && task.isGeneralReminder) return "none";
+  return task && task.repeatPattern ? task.repeatPattern : "none";
 }
 
 function KWTM_billFrequencyForSheet_(bill) {

@@ -371,6 +371,31 @@
     line-height: 1.35;
   }
 
+  .weekly-event-field {
+    display: grid;
+    gap: 0.3rem;
+    margin-top: 0.6rem;
+  }
+
+  .weekly-event-field span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: #3f5d39;
+    font-size: 0.72rem;
+    font-weight: 900;
+  }
+
+  .weekly-event-input {
+    min-height: 36px;
+    border-color: rgba(135, 166, 127, 0.34);
+    background: rgba(135, 166, 127, 0.12);
+    color: #3f5d39;
+    padding: 0.42rem 0.55rem;
+    font-size: 0.78rem;
+    font-weight: 800;
+  }
+
   .task-card {
     border-radius: 8px;
     border: 1px solid rgba(126, 97, 63, 0.14);

@@ -1,7 +1,7 @@
-import { CalendarCheck, Plus } from "lucide-react";
+import { CalendarCheck, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, DailyEvents, StaffMember, Task } from "../types";
-import { compareTasksByPriority, DAY_NAMES, dateKeyForWeekDay, formatLongDate, formatShortDate } from "../utils";
+import { addDays, compareTasksByPriority, dateFromKey, DAY_NAMES, dateKeyForWeekDay, formatLongDate, formatShortDate, toLocalDateKey, weekIdFromDate } from "../utils";
 import { categoryLabel, categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 
 type DailyAgendaViewProps = {
@@ -11,6 +11,7 @@ type DailyAgendaViewProps = {
   staff: StaffMember[];
   dailyEvents: DailyEvents;
   onDailyNoteChange: (key: string, value: string) => void;
+  onWeekChange: (weekId: string) => void;
   onAddTask: (dayOfWeek: number) => void;
   onToggleTask: (taskId: string) => void;
   onEditTask: (task: Task) => void;
@@ -22,6 +23,7 @@ export function DailyAgendaView({
   categories,
   dailyEvents,
   onDailyNoteChange,
+  onWeekChange,
   onAddTask,
   onToggleTask,
   onEditTask,
@@ -53,6 +55,10 @@ export function DailyAgendaView({
   }, [tasks, weekId]);
   const weekTaskCount = useMemo(() => Array.from(tasksByDay.values()).reduce((total, dayTasks) => total + dayTasks.length, 0), [tasksByDay]);
 
+  function moveWeek(offset: number) {
+    onWeekChange(toLocalDateKey(addDays(dateFromKey(weekId), offset)));
+  }
+
   return (
     <section className="content-surface">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -60,7 +66,20 @@ export function DailyAgendaView({
           <p className="eyebrow">Agenda</p>
           <h2 className="page-title">Week of {formatShortDate(weekId)}</h2>
         </div>
-        <span className="stat-pill">{weekTaskCount} scheduled tasks</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn-secondary" type="button" onClick={() => moveWeek(-7)}>
+            <ChevronLeft size={17} />
+            Previous
+          </button>
+          <button className="btn-secondary" type="button" onClick={() => onWeekChange(weekIdFromDate(new Date()))}>
+            Today
+          </button>
+          <button className="btn-secondary" type="button" onClick={() => moveWeek(7)}>
+            Next
+            <ChevronRight size={17} />
+          </button>
+          <span className="stat-pill">{weekTaskCount} scheduled tasks</span>
+        </div>
       </div>
 
       <div className="agenda-week-stack mt-5 grid gap-4">
