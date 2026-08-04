@@ -1,7 +1,7 @@
 const ALLOWED_ACTIONS = new Set(["pull", "pushOperations", "pushStaffTodos", "pushStaffSchedule"]);
 
-function hasTextRecordValues(record) {
-  return Object.values(record || {}).some((value) => String(value || "").trim());
+function hasRecordKeys(record) {
+  return Object.keys(record || {}).length > 0;
 }
 
 function isPrivateTask(task = {}) {
@@ -10,7 +10,7 @@ function isPrivateTask(task = {}) {
 
 function hasPrivateOperationsData(snapshot = {}) {
   return Boolean(
-    snapshot.tasks?.some(isPrivateTask) || snapshot.bills?.length || hasTextRecordValues(snapshot.dailyEvents)
+    snapshot.tasks?.some(isPrivateTask) || snapshot.bills?.length || hasRecordKeys(snapshot.dailyEvents)
   );
 }
 

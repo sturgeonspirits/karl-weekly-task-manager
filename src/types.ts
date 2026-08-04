@@ -46,6 +46,7 @@ export interface Bill {
   paymentAccount?: string;
   notes?: string;
   updatedAt?: number;
+  deleted?: boolean;
 }
 
 export interface StaffMember {

@@ -27,6 +27,7 @@ import {
   deduplicateTasks,
   ensureRecurringTasksForWeek,
   getTaskDate,
+  sanitizeBills,
   sanitizeDailyEvents,
   sanitizeTasks,
   todayStr,
@@ -70,8 +71,8 @@ function sameTasks(left: Task[], right: Task[]): boolean {
   return left.every((task, index) => JSON.stringify(task) === JSON.stringify(right[index]));
 }
 
-function hasTextRecordValues(record?: DailyEvents): boolean {
-  return Object.values(record || {}).some((value) => String(value || "").trim());
+function hasRecordKeys(record?: DailyEvents): boolean {
+  return Object.keys(record || {}).length > 0;
 }
 
 function hasAnySyncedData(snapshot: OperationsSnapshot): boolean {
@@ -79,8 +80,8 @@ function hasAnySyncedData(snapshot: OperationsSnapshot): boolean {
     snapshot.tasks.length ||
       snapshot.bills.length ||
       snapshot.staff.length ||
-      hasTextRecordValues(snapshot.dailyEvents) ||
-      hasTextRecordValues(snapshot.staffDailyEvents)
+      hasRecordKeys(snapshot.dailyEvents) ||
+      hasRecordKeys(snapshot.staffDailyEvents)
   );
 }
 
@@ -98,19 +99,7 @@ function shouldSendToStaffTodosSync(task: Task): boolean {
 }
 
 function hasPrivateOperationsData(snapshot: OperationsSnapshot): boolean {
-  return Boolean(snapshot.tasks.some(isPrivateTask) || snapshot.bills.length || hasTextRecordValues(snapshot.dailyEvents));
-}
-
-function shouldSoftDeleteTask(task: Task): boolean {
-  return Boolean(
-    task.source === "staff" ||
-      task.id.startsWith("staff-") ||
-      task.originTaskId ||
-      task.repeatsWeekly ||
-      task.repeatPattern === "weekly" ||
-      task.repeatPattern === "biweekly" ||
-      task.repeatPattern === "monthly"
-  );
+  return Boolean(snapshot.tasks.some(isPrivateTask) || snapshot.bills.length || hasRecordKeys(snapshot.dailyEvents));
 }
 
 function loadSnapshot(weekId: string): OperationsSnapshot {
@@ -130,7 +119,7 @@ function loadSnapshot(weekId: string): OperationsSnapshot {
     return {
       tasks: normalizeTasksForWeek(parsed.tasks || fallback.tasks, weekId),
       categories: parsed.categories?.length ? parsed.categories : fallback.categories,
-      bills: parsed.bills?.length ? parsed.bills : fallback.bills,
+      bills: sanitizeBills(parsed.bills?.length ? parsed.bills : fallback.bills),
       staff: parsed.staff?.length ? parsed.staff : fallback.staff,
       dailyEvents: sanitizeDailyEvents(parsed.dailyEvents || fallback.dailyEvents),
       staffDailyEvents: sanitizeDailyEvents(parsed.staffDailyEvents || fallback.staffDailyEvents || {}),
@@ -199,14 +188,14 @@ export default function App() {
   const completed = activeWeekTasks.filter((task) => task.completed).length;
   const highPriority = activeWeekTasks.filter((task) => !task.completed && task.priority === "high").length;
   const assigned = activeWeekTasks.filter((task) => !task.completed && task.assignee).length;
-  const outstandingBills = snapshot.bills.filter((bill) => !bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
+  const outstandingBills = snapshot.bills.filter((bill) => !bill.deleted && !bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
 
   function setTasks(tasks: Task[]) {
     setSnapshot((current) => ({ ...current, tasks: normalizeTasksForWeek(tasks, weekId) }));
   }
 
   function setBills(bills: Bill[]) {
-    setSnapshot((current) => ({ ...current, bills: bills.map((bill) => ({ ...bill, updatedAt: bill.updatedAt || Date.now() })) }));
+    setSnapshot((current) => ({ ...current, bills: sanitizeBills(bills) }));
   }
 
   function setStaff(staff: StaffMember[]) {
@@ -244,20 +233,18 @@ export default function App() {
 
   function deleteTask(task: Task) {
     if (!window.confirm(`Delete "${task.title}"?`)) return;
-    const softDelete = shouldSoftDeleteTask(task);
-    const deletedTasks = softDelete
-      ? snapshot.tasks.map((item) =>
-          item.id === task.id
-            ? {
-                ...item,
-                deleted: true,
-                completed: item.source === "staff" || item.id.startsWith("staff-") ? true : item.completed,
-                updatedAt: Date.now(),
-              }
-            : item
-        )
-      : snapshot.tasks.filter((item) => item.id !== task.id);
-    setTasks(deletedTasks);
+    setTasks(
+      snapshot.tasks.map((item) =>
+        item.id === task.id
+          ? {
+              ...item,
+              deleted: true,
+              completed: item.source === "staff" || item.id.startsWith("staff-") ? true : item.completed,
+              updatedAt: Date.now(),
+            }
+          : item
+      )
+    );
     setDialog({ open: false, day: task.dayOfWeek, task: null, generalReminder: false });
   }
 
@@ -282,7 +269,7 @@ export default function App() {
     setSnapshot((current) => {
       const dailyEvents: DailyEvents = { ...current.dailyEvents };
       if (value.trim()) dailyEvents[key] = value;
-      else delete dailyEvents[key];
+      else dailyEvents[key] = "";
       return { ...current, dailyEvents: sanitizeDailyEvents(dailyEvents) };
     });
   }

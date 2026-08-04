@@ -25,16 +25,18 @@ export function BillsView({ bills, onSaveBills }: BillsViewProps) {
     recurring: false,
   });
 
+  const activeBills = useMemo(() => bills.filter((bill) => !bill.deleted), [bills]);
+
   const summary = useMemo(() => {
-    const outstanding = bills.filter((bill) => !bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
-    const paid = bills.filter((bill) => bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
-    const nextDue = bills
+    const outstanding = activeBills.filter((bill) => !bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
+    const paid = activeBills.filter((bill) => bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
+    const nextDue = activeBills
       .filter((bill) => !bill.paid)
       .slice()
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]?.dueDate;
 
     return { outstanding, paid, nextDue: nextDue || "Clear" };
-  }, [bills]);
+  }, [activeBills]);
 
   function update<K extends keyof BillForm>(key: K, value: BillForm[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -66,7 +68,7 @@ export function BillsView({ bills, onSaveBills }: BillsViewProps) {
   }
 
   function deleteBill(id: string) {
-    onSaveBills(bills.filter((bill) => bill.id !== id));
+    onSaveBills(bills.map((bill) => (bill.id === id ? { ...bill, deleted: true, updatedAt: Date.now() } : bill)));
   }
 
   return (
@@ -142,7 +144,7 @@ export function BillsView({ bills, onSaveBills }: BillsViewProps) {
       </form>
 
       <div className="mt-5 grid gap-3">
-        {bills
+        {activeBills
           .slice()
           .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
           .map((bill) => (

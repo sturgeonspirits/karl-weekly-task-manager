@@ -1,6 +1,8 @@
-import type { DailyEvents, Priority, Task } from "./types";
+import type { Bill, DailyEvents, Priority, Task } from "./types";
 
 const RESERVED_TITLES = new Set(["title", "task", "completed", "id", "true", "false"]);
+export const SOFT_DELETE_RETENTION_DAYS = 90;
+const SOFT_DELETE_RETENTION_MS = SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
 export const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 export const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -116,6 +118,12 @@ export function isRecurringTask(task: Task): boolean {
   );
 }
 
+export function shouldRetainSoftDeletedRecord(record: { deleted?: boolean; updatedAt?: number }, now = Date.now()): boolean {
+  if (!record.deleted) return true;
+  const updatedAt = Number(record.updatedAt || 0);
+  return !updatedAt || now - updatedAt <= SOFT_DELETE_RETENTION_MS;
+}
+
 function normalizedRepeatPattern(task: Task): Task["repeatPattern"] {
   if (task.repeatPattern === "weekly" || task.repeatPattern === "biweekly" || task.repeatPattern === "monthly") {
     return task.repeatPattern;
@@ -203,7 +211,6 @@ export function ensureRecurringTasksForWeek(tasks: Task[], targetWeekId: string)
 }
 
 export function sanitizeTasks(tasks: Task[]): Task[] {
-  const today = todayStr();
   return tasks
     .filter((task) => !isInvalidTitle(task.title))
     .map((task): Task | null => {
@@ -248,16 +255,31 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
       };
     })
     .filter((task): task is Task => task !== null)
-    .filter((task) => task.deleted || task.isGeneralReminder || isRecurringTask(task) || !isTaskBeforeToday(task, today) || !task.completed);
+    .filter(shouldRetainSoftDeletedRecord);
+}
+
+export function sanitizeBills(bills: Bill[]): Bill[] {
+  return bills
+    .map((bill): Bill => ({
+      ...bill,
+      name: String(bill.name || "").trim(),
+      payee: bill.payee || undefined,
+      amount: Number(bill.amount || 0),
+      dueDate: bill.dueDate || "",
+      paid: Boolean(bill.paid),
+      recurring: Boolean(bill.recurring || (bill.frequency && bill.frequency.toLowerCase() !== "one-time")),
+      deleted: Boolean(bill.deleted),
+      updatedAt: bill.updatedAt || Date.now(),
+    }))
+    .filter((bill) => Boolean(bill.name && isIsoDateKey(bill.dueDate)))
+    .filter(shouldRetainSoftDeletedRecord);
 }
 
 export function sanitizeDailyEvents(events: DailyEvents): DailyEvents {
-  const today = todayStr();
   const normalized = new Map<string, string[]>();
 
   Object.entries(events).forEach(([key, note]) => {
     const cleanNote = String(note || "").trim();
-    if (!cleanNote) return;
 
     let dateKey: string | null = null;
     const legacyWeeklyKey = key.match(/^(\d{4}-\d{2}-\d{2})-([1-7])$/);
@@ -267,11 +289,16 @@ export function sanitizeDailyEvents(events: DailyEvents): DailyEvents {
       dateKey = key;
     }
 
-    if (!dateKey || dateKey < today) return;
+    if (!dateKey) return;
     normalized.set(dateKey, [...(normalized.get(dateKey) || []), cleanNote]);
   });
 
-  return Object.fromEntries(Array.from(normalized.entries()).map(([key, notes]) => [key, Array.from(new Set(notes)).join("\n")]));
+  return Object.fromEntries(
+    Array.from(normalized.entries()).map(([key, notes]) => {
+      const cleanNotes = notes.filter(Boolean);
+      return [key, Array.from(new Set(cleanNotes)).join("\n")];
+    })
+  );
 }
 
 export function deduplicateTasks(tasks: Task[]): Task[] {

@@ -1,4 +1,4 @@
-// KWTM_SCRIPT_VERSION: 2026-08-04.3
+// KWTM_SCRIPT_VERSION: 2026-08-04.4
 // KWTM_SCRIPT_UPDATED_AT: 2026-08-04
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
@@ -19,14 +19,15 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-08-04.3
+ * - KWTM_SCRIPT_VERSION 2026-08-04.4
  * - KWTM_SCRIPT_UPDATED_AT 2026-08-04
  * - Open the deployed web app URL in a browser to confirm the live script version.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-08-04.3";
+var KWTM_SCRIPT_VERSION = "2026-08-04.4";
 var KWTM_SCRIPT_UPDATED_AT = "2026-08-04";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
+var KWTM_SOFT_DELETE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 var KWTM_TASK_HEADERS = [
   "id",
@@ -46,7 +47,7 @@ var KWTM_TASK_HEADERS = [
   "shiftHours",
   "updatedAt",
 ];
-var KWTM_DAILY_HEADERS = ["key", "text", "updatedAt"];
+var KWTM_DAILY_HEADERS = ["key", "text", "updatedAt", "deleted"];
 var KWTM_CATEGORY_HEADERS = ["id", "name", "color"];
 var KWTM_BILL_HEADERS = [
   "id",
@@ -61,6 +62,7 @@ var KWTM_BILL_HEADERS = [
   "paymentAccount",
   "notes",
   "updatedAt",
+  "deleted",
 ];
 var KWTM_STAFF_HEADERS = ["id", "name", "role", "email", "phone", "color"];
 var KWTM_STAFF_SCHEDULE_HEADERS = [
@@ -215,11 +217,8 @@ function KWTM_readRows_(ss, tabName) {
   return sheet.getRange(1, 1, sheet.getLastRow(), Math.min(sheet.getLastColumn(), 26)).getDisplayValues();
 }
 
-function KWTM_hasTextRecordValues_(record) {
-  var source = record || {};
-  return Object.keys(source).some(function (key) {
-    return String(source[key] || "").trim();
-  });
+function KWTM_hasRecordKeys_(record) {
+  return Object.keys(record || {}).length > 0;
 }
 
 function KWTM_isPrivateTask_(task) {
@@ -241,7 +240,7 @@ function KWTM_hasPrivateOperationsData_(snapshot) {
   return Boolean(
     (source.tasks || []).some(KWTM_isPrivateTask_) ||
       (source.bills || []).length ||
-      KWTM_hasTextRecordValues_(source.dailyEvents)
+      KWTM_hasRecordKeys_(source.dailyEvents)
   );
 }
 
@@ -255,7 +254,7 @@ function KWTM_writeOperations_(config, snapshot) {
     return task.source !== "staff";
   });
 
-  KWTM_overwriteRows_(
+  KWTM_upsertRows_(
     ss,
     "Tasks",
     [KWTM_TASK_HEADERS].concat(
@@ -279,35 +278,43 @@ function KWTM_writeOperations_(config, snapshot) {
           task.updatedAt || new Date().getTime(),
         ];
       })
-    )
+    ),
+    0,
+    15
   );
+  KWTM_pruneDeletedRows_(ss, "Tasks", 10, 15);
 
   var dailyEvents = snapshot.dailyEvents || {};
   var now = new Date().getTime();
-  KWTM_overwriteRows_(
+  KWTM_upsertRows_(
     ss,
     "Events",
     [KWTM_DAILY_HEADERS].concat(
       Object.keys(dailyEvents)
         .sort()
         .map(function (key) {
-          return [key, dailyEvents[key], now];
+          var note = String(dailyEvents[key] || "").trim();
+          return [key, note, now, note ? "FALSE" : "TRUE"];
         })
-    )
+    ),
+    0,
+    2
   );
+  KWTM_pruneDeletedRows_(ss, "Events", 3, 2);
   KWTM_patchStaffDailyNotes_(config, dailyEvents);
 
-  KWTM_overwriteRows_(
+  KWTM_upsertRows_(
     ss,
     "Categories",
     [KWTM_CATEGORY_HEADERS].concat(
       (snapshot.categories || []).map(function (category) {
         return [category.id || "", category.name || "", category.color || ""];
       })
-    )
+    ),
+    0
   );
 
-  KWTM_overwriteRows_(
+  KWTM_upsertRows_(
     ss,
     "Bills",
     [KWTM_BILL_HEADERS].concat(
@@ -325,10 +332,14 @@ function KWTM_writeOperations_(config, snapshot) {
           bill.paymentAccount || "",
           bill.notes || "",
           bill.updatedAt || new Date().getTime(),
+          bill.deleted ? "TRUE" : "FALSE",
         ];
       })
-    )
+    ),
+    0,
+    11
   );
+  KWTM_pruneDeletedRows_(ss, "Bills", 12, 11);
 }
 
 function KWTM_writeStaffSchedule_(config, weekId, tasks, staff) {
@@ -489,66 +500,146 @@ function KWTM_closeStaffTodoMirror_(sheet, rowNumber) {
 }
 
 function KWTM_patchStaffDailyNotes_(config, dailyEvents) {
-  if (!KWTM_hasTextRecordValues_(dailyEvents)) return { skipped: true, reason: "No private event notes to mirror." };
+  if (!KWTM_hasRecordKeys_(dailyEvents)) return { skipped: true, reason: "No private event notes to mirror." };
 
   var spreadsheetId = KWTM_staffTodosSheetId_(config);
   if (!spreadsheetId) return { skipped: true, reason: "No staff scheduler sheet ID." };
 
   var ss = SpreadsheetApp.openById(spreadsheetId);
-  var tabName = KWTM_pickTab_(KWTM_sheetTitles_(ss), ["DailyNotes", "Daily Notes", "Events", "Notes", "Daily Agenda"]);
-  var sheet = tabName ? ss.getSheetByName(tabName) : ss.insertSheet("DailyNotes");
-  if (!sheet) return { skipped: true, reason: "Could not open DailyNotes tab." };
+  var tabName = KWTM_pickTab_(KWTM_sheetTitles_(ss), ["DailyNotes", "Daily Notes", "Events", "Notes", "Daily Agenda"]) || "DailyNotes";
+  var now = new Date().getTime();
 
-  if (sheet.getLastRow() < 1) {
-    sheet.getRange(1, 1, 1, 3).setValues([KWTM_DAILY_HEADERS]);
-  }
+  var rows = [KWTM_DAILY_HEADERS].concat(
+    Object.keys(dailyEvents)
+      .sort()
+      .map(function (key) {
+        var note = String(dailyEvents[key] || "").trim();
+        return [key, note, now, note ? "FALSE" : "TRUE"];
+      })
+  );
+
+  KWTM_upsertRows_(ss, tabName, rows, 0, 2);
+  KWTM_pruneDeletedRows_(ss, tabName, 3, 2);
+  return { skipped: false, rows: rows.length - 1 };
+}
+
+function KWTM_upsertRows_(ss, tabName, rows, keyColumnIndex, updatedAtColumnIndex) {
+  var normalized = KWTM_normalizeRows_(rows);
+  if (!normalized.length) return;
+
+  var sheet = ss.getSheetByName(tabName) || ss.insertSheet(tabName);
+  var width = normalized[0].length;
+  KWTM_backupTab_(ss, tabName, sheet);
+  KWTM_ensureSheetSize_(sheet, 1, width);
+  sheet.getRange(1, 1, 1, width).setValues([normalized[0]]);
+
+  if (normalized.length < 2) return;
 
   var lastRow = sheet.getLastRow();
-  var keyValues = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, 1).getDisplayValues() : [];
+  var readWidth = Math.max(width, sheet.getLastColumn());
+  var existingRows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, readWidth).getValues() : [];
   var rowByKey = {};
-  keyValues.forEach(function (row, index) {
-    var key = String(row[0] || "").trim();
-    if (key) rowByKey[key] = index + 2;
+  existingRows.forEach(function (row, index) {
+    var key = String(row[keyColumnIndex] || "").trim();
+    if (key) rowByKey[key] = { rowNumber: index + 2, values: row };
   });
 
-  var now = new Date().getTime();
-  var updated = 0;
-  var inserted = 0;
-  Object.keys(dailyEvents)
-    .sort()
-    .forEach(function (key) {
-      var note = String(dailyEvents[key] || "").trim();
-      if (!key || !note) return;
-      var rowNumber = rowByKey[key];
-      if (rowNumber) {
-        sheet.getRange(rowNumber, 2).setValue(note);
-        sheet.getRange(rowNumber, 3).setValue(now);
-        updated += 1;
-        return;
-      }
+  var rowsToAppend = [];
+  normalized.slice(1).forEach(function (row) {
+    var key = String(row[keyColumnIndex] || "").trim();
+    if (!key) return;
 
-      sheet.appendRow([key, note, now]);
-      inserted += 1;
-    });
+    var existing = rowByKey[key];
+    if (existing) {
+      if (KWTM_shouldSkipStaleRow_(row, existing.values, updatedAtColumnIndex)) return;
+      KWTM_ensureSheetSize_(sheet, existing.rowNumber, width);
+      sheet.getRange(existing.rowNumber, 1, 1, width).setValues([row]);
+      return;
+    }
 
-  return { skipped: false, updated: updated, inserted: inserted };
+    rowsToAppend.push(row);
+  });
+
+  if (rowsToAppend.length) {
+    var appendStart = sheet.getLastRow() + 1;
+    KWTM_ensureSheetSize_(sheet, appendStart + rowsToAppend.length - 1, width);
+    sheet.getRange(appendStart, 1, rowsToAppend.length, width).setValues(rowsToAppend);
+  }
+}
+
+function KWTM_shouldSkipStaleRow_(incomingRow, existingRow, updatedAtColumnIndex) {
+  if (typeof updatedAtColumnIndex !== "number") return false;
+  var incomingUpdatedAt = Number(incomingRow[updatedAtColumnIndex] || 0);
+  var existingUpdatedAt = Number(existingRow[updatedAtColumnIndex] || 0);
+  return Boolean(incomingUpdatedAt && existingUpdatedAt && existingUpdatedAt > incomingUpdatedAt);
+}
+
+function KWTM_pruneDeletedRows_(ss, tabName, deletedColumnIndex, updatedAtColumnIndex) {
+  var sheet = ss.getSheetByName(tabName);
+  if (!sheet || sheet.getLastRow() < 2) return 0;
+
+  var width = Math.max(sheet.getLastColumn(), deletedColumnIndex + 1, updatedAtColumnIndex + 1);
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getValues();
+  var cutoff = new Date().getTime() - KWTM_SOFT_DELETE_RETENTION_MS;
+  var pruned = 0;
+
+  for (var index = values.length - 1; index >= 0; index -= 1) {
+    var row = values[index];
+    var deleted = String(row[deletedColumnIndex] || "").trim().toLowerCase() === "true";
+    var updatedAt = Number(row[updatedAtColumnIndex] || 0);
+    if (deleted && updatedAt && updatedAt < cutoff) {
+      sheet.deleteRow(index + 2);
+      pruned += 1;
+    }
+  }
+
+  return pruned;
 }
 
 function KWTM_overwriteRows_(ss, tabName, rows) {
+  var normalized = KWTM_normalizeRows_(rows);
   var sheet = ss.getSheetByName(tabName) || ss.insertSheet(tabName);
+  KWTM_backupTab_(ss, tabName, sheet);
   sheet.clearContents();
-  if (!rows || !rows.length) return;
+  if (!normalized.length) return;
+
+  KWTM_ensureSheetSize_(sheet, normalized.length, normalized[0].length);
+  sheet.getRange(1, 1, normalized.length, normalized[0].length).setValues(normalized);
+}
+
+function KWTM_normalizeRows_(rows) {
+  if (!rows || !rows.length) return [];
 
   var width = rows.reduce(function (max, row) {
     return Math.max(max, row.length);
   }, 1);
-  var normalized = rows.map(function (row) {
+
+  return rows.map(function (row) {
     var next = row.slice();
     while (next.length < width) next.push("");
     return next;
   });
+}
 
-  sheet.getRange(1, 1, normalized.length, width).setValues(normalized);
+function KWTM_backupTab_(ss, tabName, sourceSheet) {
+  if (!sourceSheet || sourceSheet.getLastRow() < 1 || sourceSheet.getLastColumn() < 1) return;
+
+  var backupName = "_KWTM Backup - " + tabName;
+  var backupSheet = ss.getSheetByName(backupName) || ss.insertSheet(backupName);
+  var values = sourceSheet.getRange(1, 1, sourceSheet.getLastRow(), sourceSheet.getLastColumn()).getValues();
+  backupSheet.clearContents();
+  KWTM_ensureSheetSize_(backupSheet, values.length, values[0].length);
+  backupSheet.getRange(1, 1, values.length, values[0].length).setValues(values);
+  backupSheet.hideSheet();
+}
+
+function KWTM_ensureSheetSize_(sheet, rowCount, columnCount) {
+  if (sheet.getMaxRows() < rowCount) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), rowCount - sheet.getMaxRows());
+  }
+  if (sheet.getMaxColumns() < columnCount) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), columnCount - sheet.getMaxColumns());
+  }
 }
 
 function KWTM_dateForWeekDay_(weekId, dayOfWeek) {

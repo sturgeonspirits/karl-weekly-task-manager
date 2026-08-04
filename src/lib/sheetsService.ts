@@ -7,6 +7,7 @@ import {
   isIsoDateKey,
   normalizePriority,
   parseBoolean,
+  sanitizeBills,
   sanitizeDailyEvents,
   sanitizeTasks,
   todayStr,
@@ -61,7 +62,7 @@ const TASK_HEADERS = [
   "updatedAt",
 ];
 
-const DAILY_HEADERS = ["key", "text", "updatedAt"];
+const DAILY_HEADERS = ["key", "text", "updatedAt", "deleted"];
 const CATEGORY_HEADERS = ["id", "name", "color"];
 const BILL_HEADERS = [
   "id",
@@ -76,6 +77,7 @@ const BILL_HEADERS = [
   "paymentAccount",
   "notes",
   "updatedAt",
+  "deleted",
 ];
 const STAFF_HEADERS = ["id", "name", "role", "email", "phone", "color"];
 const STAFF_SCHEDULE_HEADERS = [
@@ -294,8 +296,11 @@ function parseTodos(rows: string[][]): Task[] {
 }
 
 function parseDailyEvents(rows: string[][]): DailyEvents {
+  const headers = (rows[0] || []).map((header) => String(header || "").trim().toLowerCase());
+  const deletedIndex = headers.indexOf("deleted");
   const events: DailyEvents = {};
   rows.slice(1).forEach((row) => {
+    if (deletedIndex >= 0 && parseBoolean(row[deletedIndex])) return;
     const rawKey = String(row[0] || "").trim();
     const note = String(row[1] || "").trim();
     if (!rawKey || !note) return;
@@ -349,33 +354,34 @@ function parseBills(rows: string[][]): Bill[] {
   const notesIndex = headers.indexOf("notes");
   const recurringIndex = indexOf("recurring", 6);
   const updatedAtIndex = indexOf("updatedat", headers.includes("title") ? 11 : 7);
+  const deletedIndex = headers.indexOf("deleted");
 
-  return rows
-    .slice(1)
-    .filter((row) => row[nameIndex])
-    .map((row) => {
-      const frequency = frequencyIndex >= 0 ? String(row[frequencyIndex] || "").trim() : "";
-      const status = String(row[statusIndex] || "").trim();
-      return {
-        id: row[idIndex] || crypto.randomUUID(),
-        name: row[nameIndex],
-        payee: payeeIndex >= 0 ? row[payeeIndex] || undefined : undefined,
-        amount: Number(String(row[amountIndex] || "0").replace(/[$,]/g, "")) || 0,
-        dueDate: row[dueDateIndex] || "",
-        paid: parseBoolean(status) || status.toLowerCase() === "paid",
-        category: row[categoryIndex] || undefined,
-        recurring:
-          parseBoolean(row[recurringIndex]) ||
-          (frequency ? frequency.toLowerCase() !== "one-time" : false),
-        frequency: frequency || undefined,
-        status: status || undefined,
-        autoPay: autoPayIndex >= 0 ? parseBoolean(row[autoPayIndex]) : undefined,
-        paymentAccount: paymentAccountIndex >= 0 ? row[paymentAccountIndex] || undefined : undefined,
-        notes: notesIndex >= 0 ? row[notesIndex] || undefined : undefined,
-        updatedAt: Number(row[updatedAtIndex] || Date.now()),
-      };
-    })
-    .filter((bill) => /^\d{4}-\d{2}-\d{2}$/.test(bill.dueDate));
+  return sanitizeBills(
+    rows
+      .slice(1)
+      .filter((row) => row[nameIndex])
+      .map((row) => {
+        const frequency = frequencyIndex >= 0 ? String(row[frequencyIndex] || "").trim() : "";
+        const status = String(row[statusIndex] || "").trim();
+        return {
+          id: row[idIndex] || crypto.randomUUID(),
+          name: row[nameIndex],
+          payee: payeeIndex >= 0 ? row[payeeIndex] || undefined : undefined,
+          amount: Number(String(row[amountIndex] || "0").replace(/[$,]/g, "")) || 0,
+          dueDate: row[dueDateIndex] || "",
+          paid: parseBoolean(status) || status.toLowerCase() === "paid",
+          category: row[categoryIndex] || undefined,
+          recurring: parseBoolean(row[recurringIndex]) || (frequency ? frequency.toLowerCase() !== "one-time" : false),
+          frequency: frequency || undefined,
+          status: status || undefined,
+          autoPay: autoPayIndex >= 0 ? parseBoolean(row[autoPayIndex]) : undefined,
+          paymentAccount: paymentAccountIndex >= 0 ? row[paymentAccountIndex] || undefined : undefined,
+          notes: notesIndex >= 0 ? row[notesIndex] || undefined : undefined,
+          updatedAt: Number(row[updatedAtIndex] || Date.now()),
+          deleted: deletedIndex >= 0 ? parseBoolean(row[deletedIndex]) : false,
+        };
+      })
+  );
 }
 
 function parseStaff(rows: string[][]): StaffMember[] {
@@ -434,8 +440,16 @@ async function syncFunctionFetch<T>(action: string, payload: Record<string, unkn
 
 export function mergeDailyEventSets(...eventSets: DailyEvents[]): DailyEvents {
   const merged: DailyEvents = {};
+  const deletedKeys = new Set<string>();
   eventSets.forEach((events) => {
     Object.entries(events).forEach(([key, value]) => {
+      if (!String(value || "").trim()) {
+        deletedKeys.add(key);
+        merged[key] = "";
+        return;
+      }
+      if (deletedKeys.has(key)) return;
+
       const lines = String(value)
         .split("\n")
         .map((line) => line.trim())
@@ -508,13 +522,17 @@ function billRowForSheet(bill: Bill): unknown[] {
     bill.paymentAccount || "",
     bill.notes || "",
     bill.updatedAt || Date.now(),
+    bill.deleted ? "TRUE" : "FALSE",
   ];
 }
 
 function dailyEventRows(events: DailyEvents): unknown[][] {
   return Object.entries(events)
     .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
-    .map(([key, note]) => [key, note, Date.now()]);
+    .map(([key, note]) => {
+      const cleanNote = String(note || "").trim();
+      return [key, cleanNote, Date.now(), cleanNote ? "FALSE" : "TRUE"];
+    });
 }
 
 export async function pullAppsScriptSnapshot(
