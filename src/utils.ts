@@ -49,10 +49,6 @@ export function dateKeyForWeekDay(weekId: string, dayOfWeek: number): string {
   return toLocalDateKey(addDays(dateFromKey(weekId), Math.max(1, Math.min(7, dayOfWeek)) - 1));
 }
 
-export function dailyEventKey(weekId: string, dayOfWeek: number): string {
-  return dateKeyForWeekDay(weekId, dayOfWeek);
-}
-
 export function eventKeyFromIsoDate(dateKey: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return null;
   return dateKey;
