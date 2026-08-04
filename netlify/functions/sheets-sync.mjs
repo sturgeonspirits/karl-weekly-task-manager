@@ -53,7 +53,7 @@ export async function handler(event) {
   if (payload.action === "pushOperations" && !hasPrivateOperationsData(payload.snapshot)) {
     return json(409, {
       ok: false,
-      error: "Blocked unsafe empty sheet overwrite. Refresh from Google Sheets instead of saving an empty cache.",
+      error: "Blocked unsafe empty sync. Refresh from Google Sheets before saving an empty cache.",
     });
   }
 

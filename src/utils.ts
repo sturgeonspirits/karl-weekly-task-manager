@@ -235,7 +235,7 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
       }
 
       const weekId = rawWeekId || (specificDate ? weekIdFromDate(dateFromKey(specificDate)) : weekIdFromDate(new Date()));
-      const isGeneralReminder = source === "staff" ? false : Boolean(task.isGeneralReminder || (!specificDate && !repeatsWeekly));
+      const isGeneralReminder = source === "staff" ? false : Boolean(!specificDate && (task.isGeneralReminder || !repeatsWeekly));
 
       return {
         ...task,
@@ -255,7 +255,7 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
       };
     })
     .filter((task): task is Task => task !== null)
-    .filter(shouldRetainSoftDeletedRecord);
+    .filter((task) => shouldRetainSoftDeletedRecord(task));
 }
 
 export function sanitizeBills(bills: Bill[]): Bill[] {
@@ -272,7 +272,7 @@ export function sanitizeBills(bills: Bill[]): Bill[] {
       updatedAt: bill.updatedAt || Date.now(),
     }))
     .filter((bill) => Boolean(bill.name && isIsoDateKey(bill.dueDate)))
-    .filter(shouldRetainSoftDeletedRecord);
+    .filter((bill) => shouldRetainSoftDeletedRecord(bill));
 }
 
 export function sanitizeDailyEvents(events: DailyEvents): DailyEvents {

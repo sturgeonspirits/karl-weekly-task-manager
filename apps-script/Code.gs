@@ -1,4 +1,4 @@
-// KWTM_SCRIPT_VERSION: 2026-08-04.4
+// KWTM_SCRIPT_VERSION: 2026-08-04.5
 // KWTM_SCRIPT_UPDATED_AT: 2026-08-04
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
@@ -19,15 +19,16 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-08-04.4
+ * - KWTM_SCRIPT_VERSION 2026-08-04.5
  * - KWTM_SCRIPT_UPDATED_AT 2026-08-04
  * - Open the deployed web app URL in a browser to confirm the live script version.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-08-04.4";
+var KWTM_SCRIPT_VERSION = "2026-08-04.5";
 var KWTM_SCRIPT_UPDATED_AT = "2026-08-04";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 var KWTM_SOFT_DELETE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+var KWTM_BACKUP_RETENTION_DAYS = 8;
 
 var KWTM_TASK_HEADERS = [
   "id",
@@ -246,7 +247,7 @@ function KWTM_hasPrivateOperationsData_(snapshot) {
 
 function KWTM_writeOperations_(config, snapshot) {
   if (!KWTM_hasPrivateOperationsData_(snapshot)) {
-    throw new Error("Blocked unsafe empty sheet overwrite. Refresh from Google Sheets instead of saving an empty cache.");
+    throw new Error("Blocked unsafe empty sync. Refresh from Google Sheets before saving an empty cache.");
   }
 
   var ss = SpreadsheetApp.openById(KWTM_privateSheetId_(config));
@@ -280,9 +281,9 @@ function KWTM_writeOperations_(config, snapshot) {
       })
     ),
     0,
-    15
+    15,
+    10
   );
-  KWTM_pruneDeletedRows_(ss, "Tasks", 10, 15);
 
   var dailyEvents = snapshot.dailyEvents || {};
   var now = new Date().getTime();
@@ -298,9 +299,9 @@ function KWTM_writeOperations_(config, snapshot) {
         })
     ),
     0,
-    2
+    2,
+    3
   );
-  KWTM_pruneDeletedRows_(ss, "Events", 3, 2);
   KWTM_patchStaffDailyNotes_(config, dailyEvents);
 
   KWTM_upsertRows_(
@@ -337,9 +338,9 @@ function KWTM_writeOperations_(config, snapshot) {
       })
     ),
     0,
-    11
+    11,
+    12
   );
-  KWTM_pruneDeletedRows_(ss, "Bills", 12, 11);
 }
 
 function KWTM_writeStaffSchedule_(config, weekId, tasks, staff) {
@@ -518,12 +519,11 @@ function KWTM_patchStaffDailyNotes_(config, dailyEvents) {
       })
   );
 
-  KWTM_upsertRows_(ss, tabName, rows, 0, 2);
-  KWTM_pruneDeletedRows_(ss, tabName, 3, 2);
+  KWTM_upsertRows_(ss, tabName, rows, 0, 2, 3);
   return { skipped: false, rows: rows.length - 1 };
 }
 
-function KWTM_upsertRows_(ss, tabName, rows, keyColumnIndex, updatedAtColumnIndex) {
+function KWTM_upsertRows_(ss, tabName, rows, keyColumnIndex, updatedAtColumnIndex, deletedColumnIndex) {
   var normalized = KWTM_normalizeRows_(rows);
   if (!normalized.length) return;
 
@@ -533,15 +533,16 @@ function KWTM_upsertRows_(ss, tabName, rows, keyColumnIndex, updatedAtColumnInde
   KWTM_ensureSheetSize_(sheet, 1, width);
   sheet.getRange(1, 1, 1, width).setValues([normalized[0]]);
 
-  if (normalized.length < 2) return;
-
   var lastRow = sheet.getLastRow();
   var readWidth = Math.max(width, sheet.getLastColumn());
   var existingRows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, readWidth).getValues() : [];
   var rowByKey = {};
+  var pruneRowNumbers = {};
   existingRows.forEach(function (row, index) {
     var key = String(row[keyColumnIndex] || "").trim();
-    if (key) rowByKey[key] = { rowNumber: index + 2, values: row };
+    var rowNumber = index + 2;
+    if (key) rowByKey[key] = { rowNumber: rowNumber, values: row };
+    if (KWTM_shouldPruneDeletedRow_(row, deletedColumnIndex, updatedAtColumnIndex)) pruneRowNumbers[rowNumber] = true;
   });
 
   var rowsToAppend = [];
@@ -554,6 +555,11 @@ function KWTM_upsertRows_(ss, tabName, rows, keyColumnIndex, updatedAtColumnInde
       if (KWTM_shouldSkipStaleRow_(row, existing.values, updatedAtColumnIndex)) return;
       KWTM_ensureSheetSize_(sheet, existing.rowNumber, width);
       sheet.getRange(existing.rowNumber, 1, 1, width).setValues([row]);
+      if (KWTM_shouldPruneDeletedRow_(row, deletedColumnIndex, updatedAtColumnIndex)) {
+        pruneRowNumbers[existing.rowNumber] = true;
+      } else {
+        delete pruneRowNumbers[existing.rowNumber];
+      }
       return;
     }
 
@@ -565,6 +571,8 @@ function KWTM_upsertRows_(ss, tabName, rows, keyColumnIndex, updatedAtColumnInde
     KWTM_ensureSheetSize_(sheet, appendStart + rowsToAppend.length - 1, width);
     sheet.getRange(appendStart, 1, rowsToAppend.length, width).setValues(rowsToAppend);
   }
+
+  KWTM_deleteRows_(sheet, Object.keys(pruneRowNumbers).map(Number));
 }
 
 function KWTM_shouldSkipStaleRow_(incomingRow, existingRow, updatedAtColumnIndex) {
@@ -574,26 +582,25 @@ function KWTM_shouldSkipStaleRow_(incomingRow, existingRow, updatedAtColumnIndex
   return Boolean(incomingUpdatedAt && existingUpdatedAt && existingUpdatedAt > incomingUpdatedAt);
 }
 
-function KWTM_pruneDeletedRows_(ss, tabName, deletedColumnIndex, updatedAtColumnIndex) {
-  var sheet = ss.getSheetByName(tabName);
-  if (!sheet || sheet.getLastRow() < 2) return 0;
-
-  var width = Math.max(sheet.getLastColumn(), deletedColumnIndex + 1, updatedAtColumnIndex + 1);
-  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getValues();
+function KWTM_shouldPruneDeletedRow_(row, deletedColumnIndex, updatedAtColumnIndex) {
+  if (typeof deletedColumnIndex !== "number" || typeof updatedAtColumnIndex !== "number") return false;
   var cutoff = new Date().getTime() - KWTM_SOFT_DELETE_RETENTION_MS;
-  var pruned = 0;
+  var deleted = String(row[deletedColumnIndex] || "").trim().toLowerCase() === "true";
+  var updatedAt = Number(row[updatedAtColumnIndex] || 0);
+  return Boolean(deleted && updatedAt && updatedAt < cutoff);
+}
 
-  for (var index = values.length - 1; index >= 0; index -= 1) {
-    var row = values[index];
-    var deleted = String(row[deletedColumnIndex] || "").trim().toLowerCase() === "true";
-    var updatedAt = Number(row[updatedAtColumnIndex] || 0);
-    if (deleted && updatedAt && updatedAt < cutoff) {
-      sheet.deleteRow(index + 2);
-      pruned += 1;
-    }
-  }
-
-  return pruned;
+function KWTM_deleteRows_(sheet, rowNumbers) {
+  rowNumbers
+    .sort(function (a, b) {
+      return b - a;
+    })
+    .filter(function (rowNumber) {
+      return rowNumber > 1;
+    })
+    .forEach(function (rowNumber) {
+      sheet.deleteRow(rowNumber);
+    });
 }
 
 function KWTM_overwriteRows_(ss, tabName, rows) {
@@ -624,13 +631,33 @@ function KWTM_normalizeRows_(rows) {
 function KWTM_backupTab_(ss, tabName, sourceSheet) {
   if (!sourceSheet || sourceSheet.getLastRow() < 1 || sourceSheet.getLastColumn() < 1) return;
 
-  var backupName = "_KWTM Backup - " + tabName;
-  var backupSheet = ss.getSheetByName(backupName) || ss.insertSheet(backupName);
+  var backupPrefix = "_KWTM Backup - " + tabName + " - ";
+  var backupName = backupPrefix + KWTM_todayKey_();
+  if (ss.getSheetByName(backupName)) return;
+
   var values = sourceSheet.getRange(1, 1, sourceSheet.getLastRow(), sourceSheet.getLastColumn()).getValues();
-  backupSheet.clearContents();
+  var backupSheet = ss.insertSheet(backupName);
   KWTM_ensureSheetSize_(backupSheet, values.length, values[0].length);
   backupSheet.getRange(1, 1, values.length, values[0].length).setValues(values);
   backupSheet.hideSheet();
+  KWTM_pruneOldBackupTabs_(ss, backupPrefix);
+}
+
+function KWTM_pruneOldBackupTabs_(ss, backupPrefix) {
+  var cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - KWTM_BACKUP_RETENTION_DAYS);
+  var cutoffKey = Utilities.formatDate(cutoff, Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+  ss.getSheets().forEach(function (sheet) {
+    var name = sheet.getName();
+    if (name.indexOf(backupPrefix) !== 0) return;
+    var dateKey = name.slice(backupPrefix.length);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey) && dateKey < cutoffKey) ss.deleteSheet(sheet);
+  });
+}
+
+function KWTM_todayKey_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
 }
 
 function KWTM_ensureSheetSize_(sheet, rowCount, columnCount) {

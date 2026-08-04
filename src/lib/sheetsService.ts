@@ -440,20 +440,24 @@ async function syncFunctionFetch<T>(action: string, payload: Record<string, unkn
 
 export function mergeDailyEventSets(...eventSets: DailyEvents[]): DailyEvents {
   const merged: DailyEvents = {};
-  const deletedKeys = new Set<string>();
+  const tombstoneKeys = new Set<string>();
   eventSets.forEach((events) => {
     Object.entries(events).forEach(([key, value]) => {
-      if (!String(value || "").trim()) {
-        deletedKeys.add(key);
-        merged[key] = "";
-        return;
-      }
-      if (deletedKeys.has(key)) return;
+      if (tombstoneKeys.has(key)) return;
 
       const lines = String(value)
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean);
+
+      if (!lines.length) {
+        if (!Object.prototype.hasOwnProperty.call(merged, key)) {
+          merged[key] = "";
+          tombstoneKeys.add(key);
+        }
+        return;
+      }
+
       const current = new Set((merged[key] || "").split("\n").filter(Boolean));
       lines.forEach((line) => current.add(line));
       merged[key] = Array.from(current).join("\n");

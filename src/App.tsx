@@ -166,7 +166,7 @@ export default function App() {
     [snapshot.tasks]
   );
   const staffSchedulerTasks = useMemo(
-    () => snapshot.tasks.filter((task) => (task.source === "staff" || task.id.startsWith("staff-")) && !task.completed),
+    () => snapshot.tasks.filter((task) => (task.source === "staff" || task.id.startsWith("staff-")) && !task.deleted && !task.completed),
     [snapshot.tasks]
   );
   const visibleDailyEvents = useMemo(
@@ -364,7 +364,7 @@ export default function App() {
       const normalizedSnapshotJson = JSON.stringify(snapshotForSave);
       if (!hasAnySyncedData(snapshotForSave)) {
         lastSavedSnapshotJsonRef.current = normalizedSnapshotJson;
-        setSyncStatus("Autosave blocked: empty cache was not written to Google Sheets.");
+        setSyncStatus("Autosave blocked: empty cache had no rows or tombstones to sync.");
         return;
       }
       const scheduledTasksForWeek = snapshotForSave.tasks.filter(
