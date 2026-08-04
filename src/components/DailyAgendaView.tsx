@@ -1,8 +1,8 @@
 import { CalendarCheck, Plus } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { CategoryOption, DailyEvents, StaffMember, Task } from "../types";
-import { compareTasksByPriority, DAY_NAMES, dateKeyForWeekDay, formatLongDate, formatShortDate, makeId } from "../utils";
-import { categoryTone, priorityLabel, priorityTone } from "../lib/ui";
+import { compareTasksByPriority, DAY_NAMES, dateKeyForWeekDay, formatLongDate, formatShortDate } from "../utils";
+import { categoryLabel, categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 
 type DailyAgendaViewProps = {
   weekId: string;
@@ -11,7 +11,7 @@ type DailyAgendaViewProps = {
   staff: StaffMember[];
   dailyEvents: DailyEvents;
   onDailyNoteChange: (key: string, value: string) => void;
-  onAddTask: (task: Task) => void;
+  onAddTask: (dayOfWeek: number) => void;
   onToggleTask: (taskId: string) => void;
   onEditTask: (task: Task) => void;
 };
@@ -20,14 +20,12 @@ export function DailyAgendaView({
   weekId,
   tasks,
   categories,
-  staff,
   dailyEvents,
   onDailyNoteChange,
   onAddTask,
   onToggleTask,
   onEditTask,
 }: DailyAgendaViewProps) {
-  const [quickTitles, setQuickTitles] = useState<Record<number, string>>({});
   const weekDays = useMemo(
     () =>
       Array.from({ length: 7 }, (_, index) => ({
@@ -55,33 +53,6 @@ export function DailyAgendaView({
   }, [tasks, weekId]);
   const weekTaskCount = useMemo(() => Array.from(tasksByDay.values()).reduce((total, dayTasks) => total + dayTasks.length, 0), [tasksByDay]);
 
-  function updateQuickTitle(dayOfWeek: number, title: string) {
-    setQuickTitles((current) => ({ ...current, [dayOfWeek]: title }));
-  }
-
-  function submitQuickTask(event: FormEvent, dayOfWeek: number, dateKey: string) {
-    event.preventDefault();
-    const title = (quickTitles[dayOfWeek] || "").trim();
-    if (!title) return;
-    onAddTask({
-      id: makeId("task"),
-      title,
-      dayOfWeek,
-      completed: false,
-      priority: "medium",
-      category: categories[0]?.name || "Production",
-      weekId,
-      repeatPattern: "none",
-      specificDate: dateKey,
-      source: "private",
-      isGeneralReminder: false,
-      assignee: staff[0]?.name,
-      shiftHours: "",
-      updatedAt: Date.now(),
-    });
-    updateQuickTitle(dayOfWeek, "");
-  }
-
   return (
     <section className="content-surface">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -104,14 +75,20 @@ export function DailyAgendaView({
                   <h3 className="text-base font-semibold text-slate-950">{day.label}</h3>
                   <p className="text-sm text-slate-500">{formatLongDate(day.dateKey)}</p>
                 </div>
-                <span className="stat-pill">{dayTasks.length} tasks</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="stat-pill">{dayTasks.length} tasks</span>
+                  <button className="btn-primary" type="button" onClick={() => onAddTask(day.dayOfWeek)}>
+                    <Plus size={17} />
+                    Add
+                  </button>
+                </div>
               </div>
 
               <label className="agenda-note-field mt-3">
                 <span className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold agenda-note-label">
                   <CalendarCheck size={17} />
                   Events note · {day.dateKey}
-                  <span className="save-pill">Auto-saves locally</span>
+                  <span className="save-pill">Auto-saves to Sheets</span>
                 </span>
                 <input
                   className="agenda-note-input"
@@ -120,22 +97,6 @@ export function DailyAgendaView({
                   placeholder="Daily note or milestone"
                 />
               </label>
-
-              <form className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={(event) => submitQuickTask(event, day.dayOfWeek, day.dateKey)}>
-                <label className="sr-only" htmlFor={`quick-task-${day.dayOfWeek}`}>
-                  Add task for {day.label}
-                </label>
-                <input
-                  id={`quick-task-${day.dayOfWeek}`}
-                  value={quickTitles[day.dayOfWeek] || ""}
-                  onChange={(event) => updateQuickTitle(day.dayOfWeek, event.target.value)}
-                  placeholder={`Add task for ${day.label}`}
-                />
-                <button className="btn-primary" type="submit">
-                  <Plus size={17} />
-                  Add
-                </button>
-              </form>
 
               <div className="mt-3 grid gap-3">
                 {dayTasks.map((task) => (
@@ -151,7 +112,7 @@ export function DailyAgendaView({
                       <h4 className={`font-semibold ${task.completed ? "text-slate-400 line-through" : "text-slate-950"}`}>{task.title}</h4>
                       <div className="mt-2 flex flex-wrap gap-2">
                         <span className={`badge ${priorityTone(task.priority)}`}>{priorityLabel(task.priority)}</span>
-                        <span className={`badge ${categoryTone(task.category, categories)}`}>{task.category}</span>
+                        <span className={`badge ${categoryTone(task.category, categories)}`}>{categoryLabel(task.category, categories)}</span>
                         {task.assignee ? <span className="badge border-slate-200 bg-white text-slate-700">{task.assignee}</span> : null}
                         {task.shiftHours ? <span className="badge border-slate-200 bg-white text-slate-700">{task.shiftHours}</span> : null}
                       </div>

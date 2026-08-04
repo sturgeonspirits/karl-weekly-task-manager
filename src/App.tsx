@@ -26,11 +26,14 @@ import {
   dateKeyForWeekDay,
   deduplicateTasks,
   ensureRecurringTasksForWeek,
+  getTaskDate,
   sanitizeDailyEvents,
   sanitizeTasks,
+  todayStr,
   toLocalDateKey,
   weekIdFromDate,
 } from "./utils";
+import { isKarlAssignee } from "./lib/ui";
 
 const STORAGE_KEY = "karl-weekly-task-manager-v2";
 const AUTO_PULL_MS = 60_000;
@@ -78,6 +81,14 @@ function hasAnySyncedData(snapshot: OperationsSnapshot): boolean {
 
 function isPrivateTask(task: Task): boolean {
   return task.source !== "staff" && !task.id.startsWith("staff-");
+}
+
+function isKarlVisibleTask(task: Task): boolean {
+  return isPrivateTask(task) || isKarlAssignee(task.assignee);
+}
+
+function shouldSendToStaffTodosSync(task: Task): boolean {
+  return Boolean(task.source === "staff" || task.id.startsWith("staff-") || (isPrivateTask(task) && task.assignee));
 }
 
 function hasPrivateOperationsData(snapshot: OperationsSnapshot): boolean {
@@ -144,7 +155,10 @@ export default function App() {
   }, [snapshot]);
 
   const scheduledTasks = useMemo(
-    () => snapshot.tasks.filter((task) => !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate)),
+    () =>
+      snapshot.tasks.filter(
+        (task) => !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate) && isKarlVisibleTask(task)
+      ),
     [snapshot.tasks]
   );
   const activeWeekTasks = useMemo(
@@ -164,6 +178,17 @@ export default function App() {
     () => mergeDailyEventSets(snapshot.dailyEvents, snapshot.staffDailyEvents || {}),
     [snapshot.dailyEvents, snapshot.staffDailyEvents]
   );
+  const earlierOpenTasks = useMemo(() => {
+    const todayKey = todayStr();
+    return snapshot.tasks.filter(
+      (task) =>
+        isKarlVisibleTask(task) &&
+        !task.completed &&
+        !task.deleted &&
+        !task.isGeneralReminder &&
+        getTaskDate(task) < todayKey
+    );
+  }, [snapshot.tasks]);
 
   const completed = activeWeekTasks.filter((task) => task.completed).length;
   const highPriority = activeWeekTasks.filter((task) => !task.completed && task.priority === "high").length;
@@ -263,6 +288,34 @@ export default function App() {
     ]);
   }
 
+  function moveEarlierOpenTasksToToday() {
+    if (!earlierOpenTasks.length) return;
+    if (!window.confirm(`Move ${earlierOpenTasks.length} earlier open task${earlierOpenTasks.length === 1 ? "" : "s"} to today?`)) return;
+
+    const todayKey = todayStr();
+    const today = dateFromKey(todayKey);
+    const day = today.getDay();
+    const dayOfWeek = day === 0 ? 7 : day;
+    const targetWeekId = weekIdFromDate(today);
+    const movingIds = new Set(earlierOpenTasks.map((task) => task.id));
+
+    setWeekId(targetWeekId);
+    setTasks(
+      snapshot.tasks.map((task) =>
+        movingIds.has(task.id)
+          ? {
+              ...task,
+              weekId: targetWeekId,
+              dayOfWeek,
+              specificDate: todayKey,
+              isGeneralReminder: false,
+              updatedAt: Date.now(),
+            }
+          : task
+      )
+    );
+  }
+
   function resetLocalData() {
     if (!window.confirm("Reload this app from Google Sheets? Local browser cache will be cleared, but nothing will be saved to Sheets.")) return;
     if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
@@ -318,7 +371,7 @@ export default function App() {
       const scheduledTasksForWeek = snapshotForSave.tasks.filter(
         (task) => task.weekId === weekId && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate)
       );
-      const staffTodos = snapshotForSave.tasks.filter((task) => task.source === "staff" || task.id.startsWith("staff-"));
+      const staffTodos = snapshotForSave.tasks.filter(shouldSendToStaffTodosSync);
       if (hasPrivateOperationsData(snapshotForSave)) {
         await pushAppsScriptOperations(SHEET_SYNC_CONFIG, snapshotForSave);
       }
@@ -460,6 +513,8 @@ export default function App() {
             onCategoryFilter={setCategoryFilter}
             onWeekChange={setWeekId}
             onAddTask={(day) => setDialog({ open: true, day, task: null })}
+            onMoveEarlierTasks={moveEarlierOpenTasksToToday}
+            earlierOpenCount={earlierOpenTasks.length}
             onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
             onToggleTask={toggleTask}
             onCloneTask={cloneTaskToNextWeek}
@@ -474,7 +529,7 @@ export default function App() {
             staff={snapshot.staff}
             dailyEvents={visibleDailyEvents}
             onDailyNoteChange={changeDailyNote}
-            onAddTask={(task) => setTasks([...snapshot.tasks, task])}
+            onAddTask={(day) => setDialog({ open: true, day, task: null })}
             onToggleTask={toggleTask}
             onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
           />
@@ -492,7 +547,9 @@ export default function App() {
 
         {activeView === "bills" ? <BillsView bills={snapshot.bills} onSaveBills={setBills} /> : null}
 
-        {activeView === "transfer" ? <TransferPanel weekId={weekId} tasks={openScheduledTasks} onTransfer={transferTasks} /> : null}
+        {activeView === "transfer" ? (
+          <TransferPanel weekId={weekId} tasks={openScheduledTasks} categories={snapshot.categories} onTransfer={transferTasks} />
+        ) : null}
 
         {activeView === "completed" ? (
           <CompletedTasksView

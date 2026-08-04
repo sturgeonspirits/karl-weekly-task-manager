@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CopyPlus,
+  MoveRight,
   Pencil,
   Plus,
   Search,
@@ -11,7 +12,7 @@ import {
 import { useMemo } from "react";
 import type { CategoryOption, DailyEvents, StaffMember, Task } from "../types";
 import { addDays, compareTasksByPriority, dateFromKey, DAY_NAMES, formatShortDate, toLocalDateKey, weekIdFromDate } from "../utils";
-import { categoryTone, priorityLabel, priorityTone, staffDot } from "../lib/ui";
+import { categoryLabel, categoryMatches, categoryTone, priorityLabel, priorityTone, staffDot } from "../lib/ui";
 
 type WeeklyGridProps = {
   weekId: string;
@@ -25,9 +26,11 @@ type WeeklyGridProps = {
   onCategoryFilter: (value: string) => void;
   onWeekChange: (weekId: string) => void;
   onAddTask: (dayOfWeek: number) => void;
+  onMoveEarlierTasks: () => void;
   onEditTask: (task: Task) => void;
   onToggleTask: (taskId: string) => void;
   onCloneTask: (task: Task) => void;
+  earlierOpenCount: number;
 };
 
 export function WeeklyGrid({
@@ -42,9 +45,11 @@ export function WeeklyGrid({
   onCategoryFilter,
   onWeekChange,
   onAddTask,
+  onMoveEarlierTasks,
   onEditTask,
   onToggleTask,
   onCloneTask,
+  earlierOpenCount,
 }: WeeklyGridProps) {
   const weekStart = useMemo(() => dateFromKey(weekId), [weekId]);
   const weekDays = useMemo(
@@ -61,16 +66,16 @@ export function WeeklyGrid({
     const query = searchTerm.trim().toLowerCase();
     return tasks
       .filter((task) => task.weekId === weekId && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate))
-      .filter((task) => categoryFilter === "all" || task.category === categoryFilter)
+      .filter((task) => categoryMatches(task.category, categoryFilter, categories))
       .filter((task) => {
         if (!query) return true;
-        return [task.title, task.description, task.category, task.assignee, task.shiftHours]
+        return [task.title, task.description, task.category, categoryLabel(task.category, categories), task.assignee, task.shiftHours]
           .join(" ")
           .toLowerCase()
           .includes(query);
       })
       .sort(compareTasksByPriority);
-  }, [categoryFilter, searchTerm, tasks, weekId]);
+  }, [categories, categoryFilter, searchTerm, tasks, weekId]);
 
   const staffByName = useMemo(() => new Map(staff.map((person) => [person.name, person])), [staff]);
   const completionCount = visibleTasks.filter((task) => task.completed).length;
@@ -109,6 +114,10 @@ export function WeeklyGrid({
             Next
             <ChevronRight size={17} />
           </button>
+          <button className="btn-secondary" type="button" onClick={onMoveEarlierTasks} disabled={!earlierOpenCount}>
+            <MoveRight size={17} />
+            Move Earlier {earlierOpenCount ? `(${earlierOpenCount})` : ""}
+          </button>
           <button className="btn-primary" type="button" onClick={() => onAddTask(1)}>
             <Plus size={17} />
             Add Task
@@ -131,7 +140,7 @@ export function WeeklyGrid({
         <select id="weekly-category-filter" value={categoryFilter} onChange={(event) => onCategoryFilter(event.target.value)}>
           <option value="all">All categories</option>
           {categories.map((category) => (
-            <option key={category.id} value={category.name}>
+            <option key={category.id} value={category.id}>
               {category.name}
             </option>
           ))}
@@ -189,7 +198,7 @@ export function WeeklyGrid({
 
                         <div className="mt-3 flex flex-wrap gap-2">
                           <span className={`badge ${priorityTone(task.priority)}`}>{priorityLabel(task.priority)}</span>
-                          <span className={`badge ${categoryTone(task.category, categories)}`}>{task.category}</span>
+                          <span className={`badge ${categoryTone(task.category, categories)}`}>{categoryLabel(task.category, categories)}</span>
                         </div>
 
                         {(task.assignee || task.shiftHours) && (

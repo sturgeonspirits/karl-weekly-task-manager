@@ -1,5 +1,7 @@
 import type { CategoryOption, Priority } from "../types";
 
+export const KARL_ASSIGNEE = "Karl Loewenstein";
+
 export const toneClasses: Record<string, string> = {
   emerald: "border-[#87A67F]/45 bg-[#87A67F]/15 text-[#3F5D39]",
   amber: "border-[#C8BCA4] bg-[#F1F1E7] text-[#7E613F]",
@@ -20,9 +22,43 @@ export const staffDotClasses: Record<string, string> = {
   copper: "bg-[#96321F]",
 };
 
+function findCategory(categoryName: string, categories: CategoryOption[]): CategoryOption | undefined {
+  const normalized = categoryName.toLowerCase();
+  return categories.find((option) => option.id.toLowerCase() === normalized || option.name.toLowerCase() === normalized);
+}
+
+function humanizeCategory(categoryName: string): string {
+  const trimmed = categoryName.trim();
+  if (!trimmed) return "Uncategorized";
+  if (/[A-Z&/]/.test(trimmed)) return trimmed;
+  return trimmed
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+export function categoryLabel(categoryName: string, categories: CategoryOption[]): string {
+  return findCategory(categoryName, categories)?.name || humanizeCategory(categoryName);
+}
+
+export function categoryValue(categoryName: string | undefined, categories: CategoryOption[]): string {
+  if (!categoryName) return categories[0]?.id || "production";
+  return findCategory(categoryName, categories)?.id || categoryName;
+}
+
+export function categoryMatches(categoryName: string, selectedCategory: string, categories: CategoryOption[]): boolean {
+  if (selectedCategory === "all") return true;
+  return categoryValue(categoryName, categories).toLowerCase() === selectedCategory.toLowerCase();
+}
+
 export function categoryTone(categoryName: string, categories: CategoryOption[]): string {
-  const category = categories.find((option) => option.name.toLowerCase() === categoryName.toLowerCase());
+  const category = findCategory(categoryName, categories);
+  if (category?.color.includes(" ") || category?.color.startsWith("bg-")) return category.color;
   return toneClasses[category?.color || "slate"] || toneClasses.slate;
+}
+
+export function isKarlAssignee(assignee?: string): boolean {
+  const normalized = String(assignee || "").trim().toLowerCase();
+  return normalized === "karl" || normalized === "karl loewenstein" || normalized.startsWith("karl@");
 }
 
 export function staffDot(color?: string): string {

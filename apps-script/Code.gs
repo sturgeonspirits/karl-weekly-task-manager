@@ -1,4 +1,4 @@
-// KWTM_SCRIPT_VERSION: 2026-08-04.1
+// KWTM_SCRIPT_VERSION: 2026-08-04.2
 // KWTM_SCRIPT_UPDATED_AT: 2026-08-04
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
@@ -19,12 +19,12 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-08-04.1
+ * - KWTM_SCRIPT_VERSION 2026-08-04.2
  * - KWTM_SCRIPT_UPDATED_AT 2026-08-04
  * - Open the deployed web app URL in a browser to confirm the live script version.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-08-04.1";
+var KWTM_SCRIPT_VERSION = "2026-08-04.2";
 var KWTM_SCRIPT_UPDATED_AT = "2026-08-04";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 
@@ -227,6 +227,15 @@ function KWTM_isPrivateTask_(task) {
   return source.source !== "staff" && !String(source.id || "").match(/^staff-/);
 }
 
+function KWTM_isKarlAssignee_(assignee) {
+  var normalized = String(assignee || "").trim().toLowerCase();
+  return normalized === "karl" || normalized === "karl loewenstein" || normalized.indexOf("karl@") === 0;
+}
+
+function KWTM_isKwtmStaffMirrorId_(id) {
+  return String(id || "").indexOf("kwtm-") === 0;
+}
+
 function KWTM_hasPrivateOperationsData_(snapshot) {
   var source = snapshot || {};
   return Boolean(
@@ -286,6 +295,7 @@ function KWTM_writeOperations_(config, snapshot) {
         })
     )
   );
+  KWTM_patchStaffDailyNotes_(config, dailyEvents);
 
   KWTM_overwriteRows_(
     ss,
@@ -365,32 +375,163 @@ function KWTM_patchStaffTodos_(config, tasks) {
   if (!tabName) return { skipped: true, reason: "No Todos tab found." };
 
   var sheet = ss.getSheetByName(tabName);
-  if (!sheet || sheet.getLastRow() < 2) return { skipped: false, updated: 0 };
+  if (!sheet) return { skipped: true, reason: "No Todos sheet found." };
+  if (sheet.getLastRow() < 1) {
+    sheet.getRange(1, 1, 1, 15).setValues([
+      ["id", "title", "category", "completed", "createdBy", "createdAt", "updatedBy", "updatedAt", "dueDate", "token", "assignee", "proof", "originTaskId", "priority", "shiftHours"],
+    ]);
+  }
 
-  var idValues = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues();
+  var lastRow = sheet.getLastRow();
+  var idValues = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, 1).getDisplayValues() : [];
   var rowById = {};
+  var existingMirrorRows = {};
   idValues.forEach(function (row, index) {
     var id = String(row[0] || "").trim();
-    if (id) rowById[id] = index + 2;
+    if (!id) return;
+    rowById[id] = index + 2;
+    if (KWTM_isKwtmStaffMirrorId_(id)) existingMirrorRows[id] = index + 2;
   });
 
   var updated = 0;
-  (tasks || []).forEach(function (task) {
-    var rawId = String(task.id || "").replace(/^staff-/, "");
-    var rowNumber = rowById[rawId];
-    if (!rowNumber) return;
+  var inserted = 0;
+  var closed = 0;
+  var activeMirrorIds = {};
 
-    sheet.getRange(rowNumber, 2).setValue(task.title || "");
-    sheet.getRange(rowNumber, 3).setValue(task.category || "");
-    sheet.getRange(rowNumber, 4).setValue(task.completed ? "TRUE" : "FALSE");
-    if (task.specificDate) sheet.getRange(rowNumber, 9).setValue(task.specificDate);
-    sheet.getRange(rowNumber, 11).setValue(task.assignee || "");
-    sheet.getRange(rowNumber, 14).setValue(KWTM_staffTodoPriorityForSheet_(task.priority));
-    sheet.getRange(rowNumber, 15).setValue(task.shiftHours || "");
-    updated += 1;
+  (tasks || []).forEach(function (task) {
+    var isStaffTask = task.source === "staff" || String(task.id || "").match(/^staff-/);
+    var rawId = isStaffTask ? String(task.id || "").replace(/^staff-/, "") : "kwtm-" + String(task.id || "");
+    var rowNumber = rowById[rawId];
+
+    if (isStaffTask) {
+      if (!rowNumber) return;
+      KWTM_updateStaffTodoRow_(sheet, rowNumber, task);
+      updated += 1;
+      return;
+    }
+
+    if (!KWTM_shouldMirrorPrivateTaskToStaff_(task)) {
+      if (rowNumber) {
+        KWTM_closeStaffTodoMirror_(sheet, rowNumber);
+        closed += 1;
+        activeMirrorIds[rawId] = true;
+      }
+      return;
+    }
+
+    activeMirrorIds[rawId] = true;
+    var mirrorRow = KWTM_staffTodoMirrorRow_(rawId, task);
+    if (rowNumber) {
+      sheet.getRange(rowNumber, 1, 1, mirrorRow.length).setValues([mirrorRow]);
+      updated += 1;
+      return;
+    }
+
+    sheet.appendRow(mirrorRow);
+    inserted += 1;
   });
 
-  return { skipped: false, updated: updated };
+  Object.keys(existingMirrorRows).forEach(function (id) {
+    if (activeMirrorIds[id]) return;
+    KWTM_closeStaffTodoMirror_(sheet, existingMirrorRows[id]);
+    closed += 1;
+  });
+
+  return { skipped: false, updated: updated, inserted: inserted, closed: closed };
+}
+
+function KWTM_shouldMirrorPrivateTaskToStaff_(task) {
+  return Boolean(
+    task &&
+      !task.deleted &&
+      !task.completed &&
+      String(task.assignee || "").trim() &&
+      !KWTM_isKarlAssignee_(task.assignee)
+  );
+}
+
+function KWTM_updateStaffTodoRow_(sheet, rowNumber, task) {
+  sheet.getRange(rowNumber, 2).setValue(task.title || "");
+  sheet.getRange(rowNumber, 3).setValue(task.category || "");
+  sheet.getRange(rowNumber, 4).setValue(task.completed ? "TRUE" : "FALSE");
+  sheet.getRange(rowNumber, 8).setValue(new Date().toISOString());
+  sheet.getRange(rowNumber, 9).setValue(task.specificDate || "");
+  sheet.getRange(rowNumber, 11).setValue(task.assignee || "");
+  sheet.getRange(rowNumber, 13).setValue(task.originTaskId || "");
+  sheet.getRange(rowNumber, 14).setValue(KWTM_staffTodoPriorityForSheet_(task.priority));
+  sheet.getRange(rowNumber, 15).setValue(task.shiftHours || "");
+}
+
+function KWTM_staffTodoMirrorRow_(rawId, task) {
+  var now = new Date().toISOString();
+  return [
+    rawId,
+    task.title || "",
+    task.category || "",
+    task.completed ? "TRUE" : "FALSE",
+    "Karl Weekly Task Manager",
+    now,
+    "Karl Weekly Task Manager",
+    now,
+    task.specificDate || "",
+    "",
+    task.assignee || "",
+    "",
+    task.originTaskId || String(task.id || ""),
+    KWTM_staffTodoPriorityForSheet_(task.priority),
+    task.shiftHours || "",
+  ];
+}
+
+function KWTM_closeStaffTodoMirror_(sheet, rowNumber) {
+  sheet.getRange(rowNumber, 4).setValue("TRUE");
+  sheet.getRange(rowNumber, 8).setValue(new Date().toISOString());
+}
+
+function KWTM_patchStaffDailyNotes_(config, dailyEvents) {
+  if (!KWTM_hasTextRecordValues_(dailyEvents)) return { skipped: true, reason: "No private event notes to mirror." };
+
+  var spreadsheetId = KWTM_staffTodosSheetId_(config);
+  if (!spreadsheetId) return { skipped: true, reason: "No staff scheduler sheet ID." };
+
+  var ss = SpreadsheetApp.openById(spreadsheetId);
+  var tabName = KWTM_pickTab_(KWTM_sheetTitles_(ss), ["DailyNotes", "Daily Notes", "Events", "Notes", "Daily Agenda"]);
+  var sheet = tabName ? ss.getSheetByName(tabName) : ss.insertSheet("DailyNotes");
+  if (!sheet) return { skipped: true, reason: "Could not open DailyNotes tab." };
+
+  if (sheet.getLastRow() < 1) {
+    sheet.getRange(1, 1, 1, 3).setValues([KWTM_DAILY_HEADERS]);
+  }
+
+  var lastRow = sheet.getLastRow();
+  var keyValues = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, 1).getDisplayValues() : [];
+  var rowByKey = {};
+  keyValues.forEach(function (row, index) {
+    var key = String(row[0] || "").trim();
+    if (key) rowByKey[key] = index + 2;
+  });
+
+  var now = new Date().getTime();
+  var updated = 0;
+  var inserted = 0;
+  Object.keys(dailyEvents)
+    .sort()
+    .forEach(function (key) {
+      var note = String(dailyEvents[key] || "").trim();
+      if (!key || !note) return;
+      var rowNumber = rowByKey[key];
+      if (rowNumber) {
+        sheet.getRange(rowNumber, 2).setValue(note);
+        sheet.getRange(rowNumber, 3).setValue(now);
+        updated += 1;
+        return;
+      }
+
+      sheet.appendRow([key, note, now]);
+      inserted += 1;
+    });
+
+  return { skipped: false, updated: updated, inserted: inserted };
 }
 
 function KWTM_overwriteRows_(ss, tabName, rows) {
@@ -433,7 +574,10 @@ function KWTM_billStatusForSheet_(bill) {
 }
 
 function KWTM_staffTodoPriorityForSheet_(priority) {
-  return String(priority || "").toLowerCase() === "high" ? "high" : "normal";
+  var normalized = String(priority || "").toLowerCase();
+  if (normalized === "high") return "high";
+  if (normalized === "low") return "low";
+  return "normal";
 }
 
 function KWTM_json_(payload) {

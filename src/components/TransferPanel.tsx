@@ -1,15 +1,17 @@
 import { ArrowRightLeft, CopyPlus } from "lucide-react";
 import { useMemo } from "react";
-import type { Task } from "../types";
+import type { CategoryOption, Task } from "../types";
 import { addDays, dateFromKey, formatShortDate, makeId, toLocalDateKey } from "../utils";
+import { categoryLabel } from "../lib/ui";
 
 type TransferPanelProps = {
   weekId: string;
   tasks: Task[];
+  categories: CategoryOption[];
   onTransfer: (tasks: Task[]) => void;
 };
 
-export function TransferPanel({ weekId, tasks, onTransfer }: TransferPanelProps) {
+export function TransferPanel({ weekId, tasks, categories, onTransfer }: TransferPanelProps) {
   const previousWeekId = toLocalDateKey(addDays(dateFromKey(weekId), -7));
   const existingKeys = useMemo(
     () => new Set(tasks.filter((task) => task.weekId === weekId).map((task) => `${task.originTaskId || task.id}|${task.dayOfWeek}`)),
@@ -57,7 +59,7 @@ export function TransferPanel({ weekId, tasks, onTransfer }: TransferPanelProps)
             <div className="min-w-0">
               <h3 className="truncate text-sm font-semibold text-slate-950">{task.title}</h3>
               <p className="text-xs text-slate-500">
-                Day {task.dayOfWeek} · {task.category}
+                Day {task.dayOfWeek} · {categoryLabel(task.category, categories)}
                 {task.assignee ? ` · ${task.assignee}` : ""}
               </p>
             </div>

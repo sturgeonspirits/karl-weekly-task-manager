@@ -91,6 +91,11 @@ const STAFF_SCHEDULE_HEADERS = [
   "completed",
 ];
 
+function isKarlAssigneeValue(value?: string): boolean {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "karl" || normalized === "karl loewenstein" || normalized.startsWith("karl@");
+}
+
 async function sheetsFetch<T>(path: string, accessToken: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${path}`, {
     ...init,
@@ -243,6 +248,7 @@ function parseTodos(rows: string[][]): Task[] {
   return rows
     .slice(1)
     .filter((row) => !isInvalidTitle(row[1]))
+    .filter((row) => !String(row[0] || "").startsWith("kwtm-"))
     .map((row) => {
       const completed = parseBoolean(row[3]);
       const hasExplicitDate = /^\d{4}-\d{2}-\d{2}$/.test(row[8] || "");
@@ -256,6 +262,8 @@ function parseTodos(rows: string[][]): Task[] {
       const weekId = toLocalDateKey(monday);
       const rawPriority = String(row[13] || "").toLowerCase();
       const priority: Task["priority"] = rawPriority === "high" ? "high" : rawPriority === "low" ? "low" : "medium";
+      const assignee = row[10] || undefined;
+      const isKarlTodo = isKarlAssigneeValue(assignee);
       const descriptionParts = [
         row[4] ? `Added by ${row[4]}` : "",
         row[8] && row[8] !== taskDate ? `Original todo date: ${row[8]}` : "",
@@ -275,9 +283,9 @@ function parseTodos(rows: string[][]): Task[] {
         repeatPattern: "none",
         originTaskId: row[12] || undefined,
         deleted: false,
-        specificDate: hasExplicitDate ? taskDate : undefined,
+        specificDate: hasExplicitDate || isKarlTodo ? taskDate : undefined,
         updatedAt: Date.parse(row[7] || row[5] || "") || Date.now(),
-        assignee: row[10] || row[4] || undefined,
+        assignee,
         shiftHours: row[14] || undefined,
         source: "staff",
         isGeneralReminder: false,

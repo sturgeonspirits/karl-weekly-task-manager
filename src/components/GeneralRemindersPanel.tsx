@@ -2,7 +2,7 @@ import { Bell, Pencil, Plus } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, Task } from "../types";
 import { compareTasksByPriority } from "../utils";
-import { categoryTone, priorityLabel, priorityTone } from "../lib/ui";
+import { categoryLabel, categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 
 type GeneralRemindersPanelProps = {
   tasks: Task[];
@@ -55,7 +55,7 @@ export function GeneralRemindersPanel({ tasks, categories, onAddReminder, onTogg
               {task.reminderDate ? <p className="mt-1 text-xs font-semibold text-[#96321F]">Reminder: {task.reminderDate}</p> : null}
               <div className="mt-3 flex flex-wrap gap-2">
                 <span className={`badge ${priorityTone(task.priority)}`}>{priorityLabel(task.priority)}</span>
-                <span className={`badge ${categoryTone(task.category, categories)}`}>{task.category}</span>
+                <span className={`badge ${categoryTone(task.category, categories)}`}>{categoryLabel(task.category, categories)}</span>
               </div>
             </div>
             <button className="icon-button justify-self-end" type="button" aria-label={`Edit ${task.title}`} onClick={() => onEditTask(task)}>

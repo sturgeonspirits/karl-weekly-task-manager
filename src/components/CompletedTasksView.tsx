@@ -2,7 +2,7 @@ import { CheckCircle2, Pencil, RotateCcw } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, Task } from "../types";
 import { compareTasksByPriority, formatLongDate } from "../utils";
-import { categoryTone, priorityLabel, priorityTone } from "../lib/ui";
+import { categoryLabel, categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 
 type CompletedTasksViewProps = {
   tasks: Task[];
@@ -52,7 +52,7 @@ export function CompletedTasksView({ tasks, categories, onToggleTask, onEditTask
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <span className={`badge ${priorityTone(task.priority)}`}>{priorityLabel(task.priority)}</span>
-                <span className={`badge ${categoryTone(task.category, categories)}`}>{task.category}</span>
+                <span className={`badge ${categoryTone(task.category, categories)}`}>{categoryLabel(task.category, categories)}</span>
               </div>
             </div>
             <div className="flex justify-end gap-2">

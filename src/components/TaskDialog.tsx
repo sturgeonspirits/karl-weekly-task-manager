@@ -2,6 +2,7 @@ import { Save, Trash2, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import type { CategoryOption, Priority, RepeatPattern, StaffMember, Task } from "../types";
 import { dateFromKey, dateKeyForWeekDay, isIsoDateKey, makeId, weekIdFromDate } from "../utils";
+import { categoryValue, isKarlAssignee, KARL_ASSIGNEE } from "../lib/ui";
 
 type TaskDialogProps = {
   open: boolean;
@@ -35,17 +36,19 @@ function createForm(
   weekId: string,
   defaultDay: number,
   categories: CategoryOption[],
+  staff: StaffMember[],
   defaultGeneralReminder = false
 ): TaskForm {
   const isGeneralReminder = task?.source === "staff" ? false : Boolean(task?.isGeneralReminder || defaultGeneralReminder);
+  const defaultAssignee = staff.some((person) => isKarlAssignee(person.name) || isKarlAssignee(person.email)) ? KARL_ASSIGNEE : KARL_ASSIGNEE;
   return {
     title: task?.title || "",
     description: task?.description || "",
     dayOfWeek: task?.dayOfWeek || defaultDay,
-    category: task?.category || categories[0]?.name || "Production",
+    category: categoryValue(task?.category, categories),
     priority: task?.priority || "medium",
     scheduledDate: isGeneralReminder ? "" : task?.specificDate || (task?.source === "staff" ? "" : dateKeyForWeekDay(task?.weekId || weekId, task?.dayOfWeek || defaultDay)),
-    assignee: task?.assignee || "",
+    assignee: task?.assignee || (task?.source === "staff" ? "" : defaultAssignee),
     shiftHours: task?.shiftHours || "",
     repeatsWeekly: Boolean(task?.repeatsWeekly || (task?.repeatPattern && task.repeatPattern !== "none")),
     repeatPattern: task?.repeatPattern || "none",
@@ -72,16 +75,16 @@ export function TaskDialog({
   onDelete,
 }: TaskDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  const [form, setForm] = useState<TaskForm>(() => createForm(task, weekId, defaultDay, categories, defaultGeneralReminder));
+  const [form, setForm] = useState<TaskForm>(() => createForm(task, weekId, defaultDay, categories, staff, defaultGeneralReminder));
 
   useEffect(() => {
     if (open) {
-      setForm(createForm(task, weekId, defaultDay, categories, defaultGeneralReminder));
+      setForm(createForm(task, weekId, defaultDay, categories, staff, defaultGeneralReminder));
       if (!dialogRef.current?.open) dialogRef.current?.showModal();
     } else if (dialogRef.current?.open) {
       dialogRef.current.close();
     }
-  }, [categories, defaultDay, defaultGeneralReminder, open, task, weekId]);
+  }, [categories, defaultDay, defaultGeneralReminder, open, staff, task, weekId]);
 
   const isEditing = Boolean(task);
   function update<K extends keyof TaskForm>(key: K, value: TaskForm[K]) {
@@ -196,7 +199,7 @@ export function TaskDialog({
               <span>Category</span>
               <select value={form.category} onChange={(event) => update("category", event.target.value)}>
                 {categories.map((category) => (
-                  <option key={category.id} value={category.name}>
+                  <option key={category.id} value={category.id}>
                     {category.name}
                   </option>
                 ))}
@@ -218,6 +221,9 @@ export function TaskDialog({
               <span>Assignee</span>
               <select value={form.assignee} onChange={(event) => update("assignee", event.target.value)}>
                 <option value="">Unassigned</option>
+                {!staff.some((person) => isKarlAssignee(person.name) || isKarlAssignee(person.email)) ? (
+                  <option value={KARL_ASSIGNEE}>{KARL_ASSIGNEE}</option>
+                ) : null}
                 {staff.map((person) => (
                   <option key={person.id} value={person.name}>
                     {person.name}
