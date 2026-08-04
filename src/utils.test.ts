@@ -328,6 +328,42 @@ describe("sanitizeTasks", () => {
     });
   });
 
+  it("keeps an undated reminder undated when sanitized repeatedly", () => {
+    // sanitizeTasks stamps the current week onto an undated reminder so it has some
+    // weekId to sort by. On the next pass that weekId must not be read back as a
+    // schedule, or the reminder silently becomes a Monday task.
+    const reminder = task({
+      id: "airbnb",
+      title: "Create ad campaign for Airbnb",
+      weekId: "",
+      specificDate: undefined,
+      dayOfWeek: 1,
+      isGeneralReminder: true,
+      repeatsWeekly: false,
+      repeatPattern: "none",
+    });
+
+    const [once] = sanitizeTasks([reminder]);
+    const [twice] = sanitizeTasks([once]);
+    const [thrice] = sanitizeTasks([twice]);
+
+    expect(once).toMatchObject({ isGeneralReminder: true, specificDate: undefined });
+    expect(twice).toMatchObject({ isGeneralReminder: true, specificDate: undefined });
+    expect(thrice).toMatchObject({ isGeneralReminder: true, specificDate: undefined });
+  });
+
+  it("still schedules a reminder once the user gives it a date", () => {
+    const [result] = sanitizeTasks([
+      task({ weekId: "2026-08-03", dayOfWeek: 3, specificDate: "2026-08-05", isGeneralReminder: false }),
+    ]);
+
+    expect(result).toMatchObject({
+      isGeneralReminder: false,
+      specificDate: "2026-08-05",
+      dayOfWeek: 3,
+    });
+  });
+
   it("normalizes legacy repeatsWeekly tasks to weekly repeat pattern", () => {
     const [result] = sanitizeTasks([task({ repeatsWeekly: true, repeatPattern: "none", isGeneralReminder: true })]);
 

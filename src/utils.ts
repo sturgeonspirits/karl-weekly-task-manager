@@ -221,7 +221,14 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
       let specificDate = source === "private" ? undefined : importedSpecificDate;
       const specificDateWasExplicit = false;
 
-      if (source === "private" && rawWeekId) {
+      // An undated reminder is given the current week below purely so it has a weekId to
+      // sort by. That stamp must never be read back as a schedule on a later pass, or the
+      // reminder turns into a Monday task -- sanitizeTasks runs on every state change, so
+      // it would happen within a second of loading. Recurring tasks are excluded because
+      // repeating implies a schedule, which is what makes them not reminders.
+      const staysUndated = source === "private" && Boolean(task.isGeneralReminder) && !repeatsWeekly;
+
+      if (source === "private" && rawWeekId && !staysUndated) {
         specificDate = dateKeyForWeekDay(rawWeekId, dayOfWeek);
       }
 
