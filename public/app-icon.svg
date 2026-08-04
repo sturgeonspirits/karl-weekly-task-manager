@@ -1,35 +1,35 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
-  <title id="title">Karl Weekly Task Manager</title>
-  <desc id="desc">A Sturgeon Spirits task manager icon with a sturgeon and check mark.</desc>
-  <rect width="512" height="512" rx="108" fill="#F7F1E3"/>
-  <rect x="42" y="42" width="428" height="428" rx="92" fill="#96321F"/>
+  <title id="title">Sturgeon Spirits Task Manager</title>
+  <desc id="desc">A Sturgeon Spirits app icon with a bold sturgeon mark.</desc>
+  <rect width="512" height="512" rx="112" fill="#F1F1E7"/>
+  <rect x="38" y="38" width="436" height="436" rx="96" fill="#242622"/>
+  <circle cx="256" cy="256" r="174" fill="#96321F"/>
   <path
-    d="M74 265c43-62 107-93 192-93 63 0 115 18 154 53 16 14 34 23 55 26-23 25-58 42-105 49l-45 62c-10-36-29-59-58-69-56 3-105 17-147 43l-50 31 24-62c-18-9-25-22-20-40z"
-    fill="#F7F1E3"
+    d="M63 270c38-45 82-74 132-88 64-18 135-9 212 28 19 9 41 15 66 18-23 24-54 42-93 53-24 34-50 58-80 72 4-24-3-46-21-65-53 0-103 10-148 31l-74 35 37-58c-15-6-25-15-31-26z"
+    fill="#F1F1E7"
   />
-  <path d="M101 284 65 232l74 25" fill="#C8BCA4"/>
+  <path d="M96 294 45 238l91 24z" fill="#C8BCA4"/>
   <path
-    d="M127 284c47-34 105-51 173-51 50 0 94-8 132-24"
+    d="M126 292c50-31 105-47 166-47 54 0 104-12 151-36"
     fill="none"
     stroke="#87A67F"
     stroke-width="22"
     stroke-linecap="round"
   />
   <path
-    d="M171 221c-16-20-29-42-37-66m75 55-19-68m64 64-3-71"
+    d="M165 220c-16-18-30-40-42-65m80 48-21-70m67 62-2-73"
     fill="none"
-    stroke="#F7F1E3"
-    stroke-width="16"
+    stroke="#F1F1E7"
+    stroke-width="17"
     stroke-linecap="round"
   />
-  <circle cx="383" cy="235" r="11" fill="#242622"/>
-  <circle cx="374" cy="360" r="76" fill="#87A67F" stroke="#F7F1E3" stroke-width="22"/>
+  <circle cx="379" cy="232" r="11" fill="#242622"/>
   <path
-    d="m334 360 28 27 55-65"
+    d="M180 352c40 20 84 27 133 20"
     fill="none"
-    stroke="#242622"
-    stroke-width="28"
+    stroke="#C8BCA4"
+    stroke-width="18"
     stroke-linecap="round"
-    stroke-linejoin="round"
+    opacity="0.86"
   />
 </svg>

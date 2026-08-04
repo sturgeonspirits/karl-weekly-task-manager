@@ -84,51 +84,53 @@ export function DailyAgendaView({
                 </div>
               </div>
 
-              <label className="agenda-note-field mt-3">
-                <span className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold agenda-note-label">
-                  <CalendarCheck size={17} />
-                  Events note · {day.dateKey}
-                  <span className="save-pill">Auto-saves to Sheets</span>
-                </span>
-                <input
-                  className="agenda-note-input"
-                  value={note}
-                  onChange={(event) => onDailyNoteChange(day.dateKey, event.target.value)}
-                  placeholder="Daily note or milestone"
-                />
-              </label>
+              <div className="agenda-day-body mt-3">
+                <label className="agenda-note-field">
+                  <span className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold agenda-note-label">
+                    <CalendarCheck size={17} />
+                    Events note · {day.dateKey}
+                    <span className="save-pill">Auto-saves to Sheets</span>
+                  </span>
+                  <input
+                    className="agenda-note-input"
+                    value={note}
+                    onChange={(event) => onDailyNoteChange(day.dateKey, event.target.value)}
+                    placeholder="Daily note or milestone"
+                  />
+                </label>
 
-              <div className="mt-3 grid gap-3">
-                {dayTasks.map((task) => (
-                  <article key={task.id} className="agenda-row">
-                    <input
-                      type="checkbox"
-                      className="mt-1 h-4 w-4 rounded border-slate-300"
-                      checked={task.completed}
-                      aria-label={`Mark ${task.title} complete`}
-                      onChange={() => onToggleTask(task.id)}
-                    />
-                    <div className="min-w-0">
-                      <h4 className={`font-semibold ${task.completed ? "text-slate-400 line-through" : "text-slate-950"}`}>{task.title}</h4>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <span className={`badge ${priorityTone(task.priority)}`}>{priorityLabel(task.priority)}</span>
-                        <span className={`badge ${categoryTone(task.category, categories)}`}>{categoryLabel(task.category, categories)}</span>
-                        {task.assignee ? <span className="badge border-slate-200 bg-white text-slate-700">{task.assignee}</span> : null}
-                        {task.shiftHours ? <span className="badge border-slate-200 bg-white text-slate-700">{task.shiftHours}</span> : null}
+                <div className="agenda-task-list grid gap-3">
+                  {dayTasks.map((task) => (
+                    <article key={task.id} className="agenda-row">
+                      <input
+                        type="checkbox"
+                        className="mt-1 h-4 w-4 rounded border-slate-300"
+                        checked={task.completed}
+                        aria-label={`Mark ${task.title} complete`}
+                        onChange={() => onToggleTask(task.id)}
+                      />
+                      <div className="min-w-0">
+                        <h4 className={`font-semibold ${task.completed ? "text-slate-400 line-through" : "text-slate-950"}`}>{task.title}</h4>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <span className={`badge ${priorityTone(task.priority)}`}>{priorityLabel(task.priority)}</span>
+                          <span className={`badge ${categoryTone(task.category, categories)}`}>{categoryLabel(task.category, categories)}</span>
+                          {task.assignee ? <span className="badge border-slate-200 bg-white text-slate-700">{task.assignee}</span> : null}
+                          {task.shiftHours ? <span className="badge border-slate-200 bg-white text-slate-700">{task.shiftHours}</span> : null}
+                        </div>
                       </div>
-                    </div>
-                    <button className="btn-secondary justify-self-end" type="button" onClick={() => onEditTask(task)}>
-                      Edit
-                    </button>
-                  </article>
-                ))}
+                      <button className="btn-secondary justify-self-end" type="button" onClick={() => onEditTask(task)}>
+                        Edit
+                      </button>
+                    </article>
+                  ))}
 
-                {!dayTasks.length ? (
-                  <div className="empty-state">
-                    <CalendarCheck size={20} />
-                    <span>No tasks on this day.</span>
-                  </div>
-                ) : null}
+                  {!dayTasks.length ? (
+                    <div className="empty-state">
+                      <CalendarCheck size={20} />
+                      <span>No tasks on this day.</span>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </section>
           );

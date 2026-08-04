@@ -56,6 +56,11 @@ const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }
   { id: "completed", label: "Completed", icon: CheckCircle2 },
 ];
 
+function initialActiveView(): ActiveView {
+  if (typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches) return "daily";
+  return "weekly";
+}
+
 function normalizeTasksForWeek(tasks: Task[], weekId: string): Task[] {
   return deduplicateTasks(ensureRecurringTasksForWeek(sanitizeTasks(tasks), weekId));
 }
@@ -136,7 +141,7 @@ function loadSnapshot(weekId: string): OperationsSnapshot {
 
 export default function App() {
   const [weekId, setWeekId] = useState(() => weekIdFromDate(new Date()));
-  const [activeView, setActiveView] = useState<ActiveView>("weekly");
+  const [activeView, setActiveView] = useState<ActiveView>(initialActiveView);
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [dialog, setDialog] = useState<DialogState>({ open: false, day: 1, task: null });
@@ -439,9 +444,9 @@ export default function App() {
           <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
             <div>
               <p className="eyebrow text-[#96321F]">Karl Weekly Task Manager</p>
-              <h1 className="text-2xl font-semibold text-ink sm:text-3xl">Distillery Schedule & Operations Desk</h1>
+              <h1 className="text-2xl font-semibold text-ink sm:text-3xl">Distillery Schedule</h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-[#7E613F]">
-                Weekly tasks, daily notes, staff shifts, bills, carryover, and Google Sheets sync in one operations desk.
+                Weekly tasks, daily notes, staff shifts, bills, carryover, and Google Sheets sync in one place.
               </p>
             </div>
             <div className="header-actions">
@@ -472,8 +477,8 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-[1500px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
-        <section className="ops-overview" aria-label="Week summary">
+      <main className="app-main mx-auto grid max-w-[1500px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
+        <section className="ops-overview app-support-panel" aria-label="Week summary">
           <div>
             <span>Tasks</span>
             <strong>{completed}/{activeWeekTasks.length}</strong>
@@ -492,73 +497,77 @@ export default function App() {
           </div>
         </section>
 
-        <GeneralRemindersPanel
-          tasks={generalReminderTasks}
-          categories={snapshot.categories}
-          onAddReminder={() => setDialog({ open: true, day: 1, task: null, generalReminder: true })}
-          onToggleTask={toggleTask}
-          onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
-        />
-
-        {activeView === "weekly" ? (
-          <WeeklyGrid
-            weekId={weekId}
-            tasks={openScheduledTasks}
+        <div className="app-support-panel">
+          <GeneralRemindersPanel
+            tasks={generalReminderTasks}
             categories={snapshot.categories}
-            staff={snapshot.staff}
-            dailyEvents={visibleDailyEvents}
-            searchTerm={searchTerm}
-            categoryFilter={categoryFilter}
-            onSearch={setSearchTerm}
-            onCategoryFilter={setCategoryFilter}
-            onWeekChange={setWeekId}
-            onAddTask={(day) => setDialog({ open: true, day, task: null })}
-            onMoveEarlierTasks={moveEarlierOpenTasksToToday}
-            earlierOpenCount={earlierOpenTasks.length}
-            onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
-            onToggleTask={toggleTask}
-            onCloneTask={cloneTaskToNextWeek}
-          />
-        ) : null}
-
-        {activeView === "daily" ? (
-          <DailyAgendaView
-            weekId={weekId}
-            tasks={openScheduledTasks}
-            categories={snapshot.categories}
-            staff={snapshot.staff}
-            dailyEvents={visibleDailyEvents}
-            onDailyNoteChange={changeDailyNote}
-            onAddTask={(day) => setDialog({ open: true, day, task: null })}
+            onAddReminder={() => setDialog({ open: true, day: 1, task: null, generalReminder: true })}
             onToggleTask={toggleTask}
             onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
           />
-        ) : null}
+        </div>
 
-        {activeView === "staff" ? (
-          <StaffSchedulerView
-            weekId={weekId}
-            tasks={staffSchedulerTasks}
-            staff={snapshot.staff}
-            onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
-            onToggleTask={toggleTask}
-          />
-        ) : null}
+        <div className="app-primary-panel">
+          {activeView === "weekly" ? (
+            <WeeklyGrid
+              weekId={weekId}
+              tasks={openScheduledTasks}
+              categories={snapshot.categories}
+              staff={snapshot.staff}
+              dailyEvents={visibleDailyEvents}
+              searchTerm={searchTerm}
+              categoryFilter={categoryFilter}
+              onSearch={setSearchTerm}
+              onCategoryFilter={setCategoryFilter}
+              onWeekChange={setWeekId}
+              onAddTask={(day) => setDialog({ open: true, day, task: null })}
+              onMoveEarlierTasks={moveEarlierOpenTasksToToday}
+              earlierOpenCount={earlierOpenTasks.length}
+              onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
+              onToggleTask={toggleTask}
+              onCloneTask={cloneTaskToNextWeek}
+            />
+          ) : null}
 
-        {activeView === "bills" ? <BillsView bills={snapshot.bills} onSaveBills={setBills} /> : null}
+          {activeView === "daily" ? (
+            <DailyAgendaView
+              weekId={weekId}
+              tasks={openScheduledTasks}
+              categories={snapshot.categories}
+              staff={snapshot.staff}
+              dailyEvents={visibleDailyEvents}
+              onDailyNoteChange={changeDailyNote}
+              onAddTask={(day) => setDialog({ open: true, day, task: null })}
+              onToggleTask={toggleTask}
+              onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
+            />
+          ) : null}
 
-        {activeView === "transfer" ? (
-          <TransferPanel weekId={weekId} tasks={openScheduledTasks} categories={snapshot.categories} onTransfer={transferTasks} />
-        ) : null}
+          {activeView === "staff" ? (
+            <StaffSchedulerView
+              weekId={weekId}
+              tasks={staffSchedulerTasks}
+              staff={snapshot.staff}
+              onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
+              onToggleTask={toggleTask}
+            />
+          ) : null}
 
-        {activeView === "completed" ? (
-          <CompletedTasksView
-            tasks={snapshot.tasks}
-            categories={snapshot.categories}
-            onToggleTask={toggleTask}
-            onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
-          />
-        ) : null}
+          {activeView === "bills" ? <BillsView bills={snapshot.bills} onSaveBills={setBills} /> : null}
+
+          {activeView === "transfer" ? (
+            <TransferPanel weekId={weekId} tasks={openScheduledTasks} categories={snapshot.categories} onTransfer={transferTasks} />
+          ) : null}
+
+          {activeView === "completed" ? (
+            <CompletedTasksView
+              tasks={snapshot.tasks}
+              categories={snapshot.categories}
+              onToggleTask={toggleTask}
+              onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
+            />
+          ) : null}
+        </div>
 
       </main>
 

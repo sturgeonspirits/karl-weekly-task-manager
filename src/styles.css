@@ -194,6 +194,19 @@
     box-shadow: 0 12px 28px rgba(36, 38, 34, 0.05);
   }
 
+  .app-primary-panel,
+  .app-support-panel {
+    min-width: 0;
+  }
+
+  .app-support-panel {
+    order: 1;
+  }
+
+  .app-primary-panel {
+    order: 2;
+  }
+
   .page-title {
     font-size: 1.25rem;
     line-height: 1.2;
@@ -303,6 +316,11 @@
     padding: 0.9rem;
   }
 
+  .agenda-day-body {
+    display: grid;
+    gap: 0.75rem;
+  }
+
   .agenda-note-field {
     display: grid;
     gap: 0.35rem;
@@ -310,6 +328,11 @@
     border: 1px solid rgba(135, 166, 127, 0.28);
     background: rgba(255, 255, 255, 0.74);
     padding: 0.55rem;
+    order: 1;
+  }
+
+  .agenda-task-list {
+    order: 2;
   }
 
   .agenda-note-input {
@@ -576,6 +599,14 @@
 }
 
 @media (max-width: 760px) {
+  .app-primary-panel {
+    order: 1;
+  }
+
+  .app-support-panel {
+    order: 2;
+  }
+
   .content-surface {
     padding: 0.85rem;
   }
@@ -598,6 +629,14 @@
 
   .day-column {
     min-height: auto;
+  }
+
+  .agenda-task-list {
+    order: 1;
+  }
+
+  .agenda-note-field {
+    order: 2;
   }
 
   .segmented-days {
