@@ -454,6 +454,14 @@
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
+  .agenda-row-clickable {
+    cursor: pointer;
+  }
+
+  .agenda-row-clickable:hover {
+    border-color: rgba(150, 50, 31, 0.32);
+  }
+
   .shift-row {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
@@ -631,14 +639,6 @@
     min-height: auto;
   }
 
-  .agenda-task-list {
-    order: 1;
-  }
-
-  .agenda-note-field {
-    order: 2;
-  }
-
   .segmented-days {
     min-width: 0;
     overflow-x: auto;
@@ -651,12 +651,15 @@
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .agenda-row .btn-secondary,
   .reminder-card .icon-button,
   .shift-row .btn-secondary,
   .bill-row strong,
   .bill-row .icon-button:last-child {
     grid-column: 2;
     justify-self: start;
+  }
+
+  .agenda-edit-button {
+    display: none;
   }
 }

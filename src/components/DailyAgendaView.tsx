@@ -101,12 +101,15 @@ export function DailyAgendaView({
 
                 <div className="agenda-task-list grid gap-3">
                   {dayTasks.map((task) => (
-                    <article key={task.id} className="agenda-row">
+                    <article key={task.id} className="agenda-row agenda-row-clickable" onClick={() => onEditTask(task)}>
                       <input
                         type="checkbox"
                         className="mt-1 h-4 w-4 rounded border-slate-300"
                         checked={task.completed}
                         aria-label={`Mark ${task.title} complete`}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
                         onChange={() => onToggleTask(task.id)}
                       />
                       <div className="min-w-0">
@@ -118,7 +121,14 @@ export function DailyAgendaView({
                           {task.shiftHours ? <span className="badge border-slate-200 bg-white text-slate-700">{task.shiftHours}</span> : null}
                         </div>
                       </div>
-                      <button className="btn-secondary justify-self-end" type="button" onClick={() => onEditTask(task)}>
+                      <button
+                        className="btn-secondary agenda-edit-button justify-self-end"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEditTask(task);
+                        }}
+                      >
                         Edit
                       </button>
                     </article>
