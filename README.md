@@ -40,6 +40,13 @@ Do not add the password to this repository. If either variable is missing, the d
 
 The app autosyncs through a Netlify Function that calls an Apps Script web app attached to the private Karl task sheet. There is no in-browser Google OAuth client ID.
 
+Apps Script versioning rule: every `apps-script/Code.gs` revision must start with visible top-of-file version lines, before the header comment:
+
+```js
+// KWTM_SCRIPT_VERSION: YYYY-MM-DD.N
+// KWTM_SCRIPT_UPDATED_AT: YYYY-MM-DD
+```
+
 1. Open the private Karl task sheet.
 2. Go to Extensions > Apps Script.
 3. Paste the contents of `apps-script/Code.gs`.

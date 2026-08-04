@@ -1,3 +1,7 @@
+// KWTM_SCRIPT_VERSION: 2026-08-04.1
+// KWTM_SCRIPT_UPDATED_AT: 2026-08-04
+// Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
+
 /*
  * Karl Weekly Task Manager sync bridge.
  *
@@ -15,12 +19,13 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-08-03.3
+ * - KWTM_SCRIPT_VERSION 2026-08-04.1
+ * - KWTM_SCRIPT_UPDATED_AT 2026-08-04
  * - Open the deployed web app URL in a browser to confirm the live script version.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-08-03.3";
-var KWTM_SCRIPT_UPDATED_AT = "2026-08-03";
+var KWTM_SCRIPT_VERSION = "2026-08-04.1";
+var KWTM_SCRIPT_UPDATED_AT = "2026-08-04";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 
 var KWTM_TASK_HEADERS = [
