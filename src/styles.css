@@ -172,6 +172,22 @@
     font-weight: 800;
   }
 
+  /* Sync failures must not read as the same kind of message as "Autosaved to Sheets."
+     Square corners and the copper alert colour separate them at a glance. */
+  .header-sync-error {
+    align-self: flex-start;
+    border-radius: 0.4rem;
+    border: 1px solid rgba(150, 50, 31, 0.45);
+    border-left-width: 4px;
+    background: rgba(150, 50, 31, 0.1);
+    padding: 0.45rem 0.7rem;
+    color: #96321f;
+    font-size: 0.78rem;
+    font-weight: 800;
+    max-width: 60ch;
+    line-height: 1.45;
+  }
+
   .icon-button {
     display: inline-flex;
     align-items: center;

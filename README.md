@@ -36,6 +36,12 @@ This app uses a Netlify Edge Function for HTTP Basic Auth. In Netlify, add these
 
 Do not add the password to this repository. If either variable is missing, the deployed site returns `503 Site access is not configured.`
 
+Optional:
+
+- `APP_SESSION_SECRET`: signing key for the session cookie. The cookie stores an HMAC of the username and an expiry, never the password. When this variable is absent the key is derived from `APP_BASIC_AUTH_PASSWORD` instead, so the site works without it. Setting it is preferable because changing it revokes every existing session without having to change the password.
+
+Sessions last 30 days. Changing the password or `APP_SESSION_SECRET` invalidates existing cookies, so everyone signs in once more.
+
 ### Google Sheets autosync
 
 The app autosyncs through a Netlify Function that calls an Apps Script web app attached to the private Karl task sheet. There is no in-browser Google OAuth client ID.

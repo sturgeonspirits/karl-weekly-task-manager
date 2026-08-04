@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "test": "vitest run",
-    "ci": "tsc -b && vitest run",
+    "ci": "npm run build && vitest run",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

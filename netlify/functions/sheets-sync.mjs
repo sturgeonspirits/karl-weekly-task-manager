@@ -1,3 +1,8 @@
+// NOTE: isPrivateTask / hasRecordKeys / hasPrivateOperationsData below are duplicates of
+// src/lib/taskPredicates.ts, and of KWTM_isPrivateTask_ / KWTM_hasPrivateOperationsData_ in
+// apps-script/Code.gs. A Netlify Function bundle cannot import from src/, so the three
+// copies must be kept in agreement by hand. Change one, change all three.
+
 const ALLOWED_ACTIONS = new Set(["pull", "pushOperations", "pushStaffTodos", "pushStaffSchedule"]);
 
 function hasRecordKeys(record) {

@@ -35,8 +35,10 @@ import {
   weekIdFromDate,
 } from "./utils";
 import { isKarlAssignee } from "./lib/ui";
+import { STORAGE_KEY } from "./lib/storage";
+import { hasAnySyncedData, hasPrivateOperationsData, isPrivateTask, isStaffTask } from "./lib/taskPredicates";
 
-const STORAGE_KEY = "karl-weekly-task-manager-v2";
+
 const AUTO_PULL_MS = 60_000;
 const AUTO_SAVE_MS = 2_500;
 const SHEET_SYNC_CONFIG: AppsScriptSyncConfig = {
@@ -71,35 +73,23 @@ function sameTasks(left: Task[], right: Task[]): boolean {
   return left.every((task, index) => JSON.stringify(task) === JSON.stringify(right[index]));
 }
 
-function hasRecordKeys(record?: DailyEvents): boolean {
-  return Object.keys(record || {}).length > 0;
-}
-
-function hasAnySyncedData(snapshot: OperationsSnapshot): boolean {
-  return Boolean(
-    snapshot.tasks.length ||
-      snapshot.bills.length ||
-      snapshot.staff.length ||
-      hasRecordKeys(snapshot.dailyEvents) ||
-      hasRecordKeys(snapshot.staffDailyEvents)
-  );
-}
-
-function isPrivateTask(task: Task): boolean {
-  return task.source !== "staff" && !task.id.startsWith("staff-");
-}
-
 function isKarlVisibleTask(task: Task): boolean {
   return isPrivateTask(task) || isKarlAssignee(task.assignee);
 }
 
-function shouldSendToStaffTodosSync(task: Task): boolean {
-  if (task.source === "staff" || task.id.startsWith("staff-")) return true;
-  return Boolean(isPrivateTask(task) && !task.isGeneralReminder && task.assignee && !isKarlAssignee(task.assignee));
+function isEarlierOpenTask(task: Task, todayKey: string): boolean {
+  return (
+    isKarlVisibleTask(task) &&
+    !task.completed &&
+    !task.deleted &&
+    !task.isGeneralReminder &&
+    getTaskDate(task) < todayKey
+  );
 }
 
-function hasPrivateOperationsData(snapshot: OperationsSnapshot): boolean {
-  return Boolean(snapshot.tasks.some(isPrivateTask) || snapshot.bills.length || hasRecordKeys(snapshot.dailyEvents));
+function shouldSendToStaffTodosSync(task: Task): boolean {
+  if (isStaffTask(task)) return true;
+  return Boolean(isPrivateTask(task) && !task.isGeneralReminder && task.assignee && !isKarlAssignee(task.assignee));
 }
 
 function loadSnapshot(weekId: string): OperationsSnapshot {
@@ -138,6 +128,9 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<OperationsSnapshot>(() => loadSnapshot(weekId));
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
+  // Kept separate from syncStatus so a failure is not silently painted over by the next
+  // "Autosave queued...". It clears only when a sync actually succeeds.
+  const [syncError, setSyncError] = useState("");
   const autoPullStartedRef = useRef(false);
   const autoSaveTimerRef = useRef<number | null>(null);
   const syncReadyRef = useRef(false);
@@ -145,9 +138,21 @@ export default function App() {
   const remoteSnapshotJsonRef = useRef("");
   const lastSavedSnapshotJsonRef = useRef(JSON.stringify(snapshot));
 
+  // Serialising the snapshot is O(size of everything), so do it once per change and share
+  // the result between the cache write and the autosave dirty check.
+  const snapshotJson = useMemo(() => JSON.stringify(snapshot), [snapshot]);
+
+  // Lets pullSheets read the newest snapshot without taking it as a dependency. Without
+  // this, pullSheets is rebuilt on every edit and the auto-pull interval below is torn
+  // down and restarted with it, so it never actually reaches AUTO_PULL_MS while you type.
+  const snapshotRef = useRef(snapshot);
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    snapshotRef.current = snapshot;
   }, [snapshot]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, snapshotJson);
+  }, [snapshotJson]);
 
   const scheduledTasks = useMemo(
     () =>
@@ -166,7 +171,7 @@ export default function App() {
     [snapshot.tasks]
   );
   const staffSchedulerTasks = useMemo(
-    () => snapshot.tasks.filter((task) => (task.source === "staff" || task.id.startsWith("staff-")) && !task.deleted && !task.completed),
+    () => snapshot.tasks.filter((task) => isStaffTask(task) && !task.deleted && !task.completed),
     [snapshot.tasks]
   );
   const visibleDailyEvents = useMemo(
@@ -175,14 +180,7 @@ export default function App() {
   );
   const earlierOpenTasks = useMemo(() => {
     const todayKey = todayStr();
-    return snapshot.tasks.filter(
-      (task) =>
-        isKarlVisibleTask(task) &&
-        !task.completed &&
-        !task.deleted &&
-        !task.isGeneralReminder &&
-        getTaskDate(task) < todayKey
-    );
+    return snapshot.tasks.filter((task) => isEarlierOpenTask(task, todayKey));
   }, [snapshot.tasks]);
 
   const completed = activeWeekTasks.filter((task) => task.completed).length;
@@ -190,8 +188,14 @@ export default function App() {
   const assigned = activeWeekTasks.filter((task) => !task.completed && task.assignee).length;
   const outstandingBills = snapshot.bills.filter((bill) => !bill.deleted && !bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
 
-  function setTasks(tasks: Task[]) {
-    setSnapshot((current) => ({ ...current, tasks: normalizeTasksForWeek(tasks, weekId) }));
+  /**
+   * Every task mutation goes through here. The updater receives the freshest task list
+   * rather than the one captured when this render started, so two changes landing in the
+   * same tick (a rapid double toggle, a save while an autosync is applying) can no longer
+   * clobber each other.
+   */
+  function updateTasks(updater: (tasks: Task[]) => Task[]) {
+    setSnapshot((current) => ({ ...current, tasks: normalizeTasksForWeek(updater(current.tasks), weekId) }));
   }
 
   function setBills(bills: Bill[]) {
@@ -217,29 +221,30 @@ export default function App() {
       shiftHours: isGeneralReminder ? undefined : task.shiftHours,
       isGeneralReminder,
     };
-    const exists = snapshot.tasks.some((item) => item.id === normalizedTask.id);
-    setTasks(exists ? snapshot.tasks.map((item) => (item.id === normalizedTask.id ? normalizedTask : item)) : [...snapshot.tasks, normalizedTask]);
+    updateTasks((tasks) =>
+      tasks.some((item) => item.id === normalizedTask.id)
+        ? tasks.map((item) => (item.id === normalizedTask.id ? normalizedTask : item))
+        : [...tasks, normalizedTask]
+    );
     setSyncStatus(syncReadyRef.current ? "Autosave queued..." : "Saved locally. Waiting for Sheets connection before autosave.");
     setDialog({ open: false, day: normalizedTask.dayOfWeek, task: null });
   }
 
   function toggleTask(taskId: string) {
-    setTasks(
-      snapshot.tasks.map((task) =>
-        task.id === taskId ? { ...task, completed: !task.completed, updatedAt: Date.now() } : task
-      )
+    updateTasks((tasks) =>
+      tasks.map((task) => (task.id === taskId ? { ...task, completed: !task.completed, updatedAt: Date.now() } : task))
     );
   }
 
   function deleteTask(task: Task) {
     if (!window.confirm(`Delete "${task.title}"?`)) return;
-    setTasks(
-      snapshot.tasks.map((item) =>
+    updateTasks((tasks) =>
+      tasks.map((item) =>
         item.id === task.id
           ? {
               ...item,
               deleted: true,
-              completed: item.source === "staff" || item.id.startsWith("staff-") ? true : item.completed,
+              completed: isStaffTask(item) ? true : item.completed,
               updatedAt: Date.now(),
             }
           : item
@@ -261,7 +266,7 @@ export default function App() {
       isGeneralReminder: false,
       updatedAt: Date.now(),
     };
-    setTasks([...snapshot.tasks, clone]);
+    updateTasks((tasks) => [...tasks, clone]);
     setWeekId(nextWeekId);
   }
 
@@ -274,11 +279,11 @@ export default function App() {
     });
   }
 
-  function transferTasks(tasks: Task[]) {
-    if (!tasks.length) return;
-    setTasks([
-      ...snapshot.tasks,
-      ...tasks.map((task) => ({
+  function transferTasks(tasksToTransfer: Task[]) {
+    if (!tasksToTransfer.length) return;
+    updateTasks((tasks) => [
+      ...tasks,
+      ...tasksToTransfer.map((task) => ({
         ...task,
         specificDate: dateKeyForWeekDay(weekId, task.dayOfWeek),
         specificDateWasExplicit: false,
@@ -296,12 +301,13 @@ export default function App() {
     const day = today.getDay();
     const dayOfWeek = day === 0 ? 7 : day;
     const targetWeekId = weekIdFromDate(today);
-    const movingIds = new Set(earlierOpenTasks.map((task) => task.id));
 
     setWeekId(targetWeekId);
-    setTasks(
-      snapshot.tasks.map((task) =>
-        movingIds.has(task.id)
+    updateTasks((tasks) =>
+      // Re-select inside the updater rather than reusing the memo, so a task that finished
+      // syncing between the confirm and this update is not dragged forward anyway.
+      tasks.map((task) =>
+        isEarlierOpenTask(task, todayKey)
           ? {
               ...task,
               weekId: targetWeekId,
@@ -321,7 +327,7 @@ export default function App() {
     autoSaveTimerRef.current = null;
     syncReadyRef.current = false;
     remoteSnapshotJsonRef.current = "";
-    lastSavedSnapshotJsonRef.current = JSON.stringify(snapshot);
+    lastSavedSnapshotJsonRef.current = JSON.stringify(snapshotRef.current);
     localStorage.removeItem(STORAGE_KEY);
     setSyncStatus("Local cache cleared. Refreshing from Google Sheets...");
     void pullSheets();
@@ -333,22 +339,24 @@ export default function App() {
     setSyncBusy(true);
     if (!silent) setSyncStatus("Refreshing from Google Sheets...");
     try {
-      const pulledSnapshot = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshot);
+      const pulledSnapshot = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshotRef.current);
       const nextSnapshot = { ...pulledSnapshot, tasks: normalizeTasksForWeek(pulledSnapshot.tasks, weekId) };
-      const snapshotJson = JSON.stringify(nextSnapshot);
+      const pulledJson = JSON.stringify(nextSnapshot);
       const needsSheetRepair = nextSnapshot.tasks.some((task) => task.needsSheetRepair);
-      remoteSnapshotJsonRef.current = needsSheetRepair ? "" : snapshotJson;
-      lastSavedSnapshotJsonRef.current = needsSheetRepair ? "" : snapshotJson;
+      remoteSnapshotJsonRef.current = needsSheetRepair ? "" : pulledJson;
+      lastSavedSnapshotJsonRef.current = needsSheetRepair ? "" : pulledJson;
       syncReadyRef.current = true;
       setSnapshot(nextSnapshot);
       setSyncStatus(needsSheetRepair ? "Sheets refreshed; cleanup queued." : silent ? "Autosync refreshed from Sheets." : "Sheets refreshed.");
+      setSyncError("");
     } catch (error) {
-      setSyncStatus(error instanceof Error ? error.message : "Autosync refresh failed.");
+      setSyncStatus("");
+      setSyncError(`Could not refresh from Sheets: ${error instanceof Error ? error.message : "unknown error"}`);
     } finally {
       syncInFlightRef.current = false;
       setSyncBusy(false);
     }
-  }, [snapshot, weekId]);
+  }, [weekId]);
 
   const autoSaveSnapshot = useCallback(async (snapshotToSave: OperationsSnapshot, snapshotJson: string) => {
     if (syncInFlightRef.current) {
@@ -378,8 +386,12 @@ export default function App() {
       await pushAppsScriptStaffSchedule(SHEET_SYNC_CONFIG, weekId, scheduledTasksForWeek, snapshotForSave.staff);
       lastSavedSnapshotJsonRef.current = normalizedSnapshotJson;
       setSyncStatus("Autosaved to Sheets.");
+      setSyncError("");
     } catch (error) {
-      setSyncStatus(error instanceof Error ? error.message : "Autosave failed.");
+      setSyncStatus("");
+      setSyncError(
+        `Not saved to Sheets: ${error instanceof Error ? error.message : "unknown error"}. Your changes are still in this browser; they will retry on the next edit.`
+      );
     } finally {
       autoSaveTimerRef.current = null;
       syncInFlightRef.current = false;
@@ -401,6 +413,8 @@ export default function App() {
     });
   }, [weekId]);
 
+  // pullSheets now depends only on weekId, so this interval survives editing instead of
+  // being cleared and restarted on every keystroke.
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (document.visibilityState !== "visible" || autoSaveTimerRef.current) return;
@@ -410,7 +424,6 @@ export default function App() {
   }, [pullSheets]);
 
   useEffect(() => {
-    const snapshotJson = JSON.stringify(snapshot);
     if (remoteSnapshotJsonRef.current === snapshotJson) {
       remoteSnapshotJsonRef.current = "";
       return;
@@ -450,7 +463,13 @@ export default function App() {
               </button>
             </div>
           </div>
-          {syncStatus ? <p className="header-sync-status">{syncStatus}</p> : null}
+          {syncError ? (
+            <p className="header-sync-error" role="alert">
+              {syncError}
+            </p>
+          ) : syncStatus ? (
+            <p className="header-sync-status">{syncStatus}</p>
+          ) : null}
 
           <nav className="app-nav" aria-label="Application views">
             {navItems.map((item) => {

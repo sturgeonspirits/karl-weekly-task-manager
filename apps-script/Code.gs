@@ -30,6 +30,11 @@ var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTP
 var KWTM_SOFT_DELETE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 var KWTM_BACKUP_RETENTION_DAYS = 8;
 
+// NOTE: the KWTM_*_HEADERS arrays below mirror src/lib/sheetSchema.ts, and
+// KWTM_isPrivateTask_ / KWTM_hasPrivateOperationsData_ mirror src/lib/taskPredicates.ts.
+// Apps Script cannot import from the repo, so these copies are kept in agreement by hand.
+// If you add, remove, or reorder a column here, make the same change in sheetSchema.ts.
+
 var KWTM_TASK_HEADERS = [
   "id",
   "title",

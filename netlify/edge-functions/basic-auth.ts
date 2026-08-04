@@ -10,6 +10,22 @@ type NetlifyEdgeContext = {
 
 const REALM = "Karl Weekly Task Manager";
 const AUTH_COOKIE = "kwtm_auth";
+const SESSION_MAX_AGE_SECONDS = 2_592_000; // 30 days
+
+/**
+ * The session cookie used to be btoa(`${user}:${password}`) -- base64, not a hash, so
+ * anyone who saw the cookie value could read the password straight back out. It is now an
+ * HMAC over the username and an expiry, which is one-way.
+ *
+ * The signing key comes from APP_SESSION_SECRET when set. When it is not set we derive a
+ * key from the configured password instead, so the deployment keeps working without new
+ * environment variables; the cookie is still one-way either way. Setting
+ * APP_SESSION_SECRET is better because rotating it revokes sessions without forcing a
+ * password change.
+ */
+function signingKeyMaterial(password: string): string {
+  return Netlify.env.get("APP_SESSION_SECRET") || `derived-from-password:${password}`;
+}
 
 function isFunctionRequest(request: Request): boolean {
   return new URL(request.url).pathname.startsWith("/.netlify/functions/");
@@ -47,8 +63,29 @@ function unavailable(request: Request): Response {
   });
 }
 
-function sessionToken(username: string, password: string): string {
-  return btoa(`${username}:${password}`);
+function base64Url(bytes: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(bytes)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+async function sign(payload: string, keyMaterial: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(keyMaterial),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  return base64Url(await crypto.subtle.sign("HMAC", key, encoder.encode(payload)));
+}
+
+/** Cookie value is `<expiryEpochSeconds>.<hmac>` -- readable expiry, unforgeable signature. */
+async function sessionToken(username: string, password: string, expiresAt: number): Promise<string> {
+  const payload = `${username}|${expiresAt}`;
+  return `${expiresAt}.${await sign(payload, signingKeyMaterial(password))}`;
 }
 
 function parseCookies(header: string | null): Record<string, string> {
@@ -69,18 +106,27 @@ function parseCookies(header: string | null): Record<string, string> {
   return cookies;
 }
 
-function hasValidSessionCookie(request: Request, username: string, password: string): boolean {
+async function hasValidSessionCookie(request: Request, username: string, password: string): Promise<boolean> {
   const cookieValue = parseCookies(request.headers.get("cookie"))[AUTH_COOKIE] || "";
-  return constantTimeEquals(cookieValue, sessionToken(username, password));
+  const separator = cookieValue.indexOf(".");
+  if (separator < 0) return false;
+
+  const expiresAt = Number(cookieValue.slice(0, separator));
+  if (!Number.isFinite(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) return false;
+
+  const expected = await sessionToken(username, password, expiresAt);
+  return constantTimeEquals(cookieValue, expected);
 }
 
-function sessionCookie(username: string, password: string): string {
-  return `${AUTH_COOKIE}=${encodeURIComponent(sessionToken(username, password))}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000`;
+async function sessionCookie(username: string, password: string): Promise<string> {
+  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS;
+  const token = await sessionToken(username, password, expiresAt);
+  return `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_MAX_AGE_SECONDS}`;
 }
 
-function withSessionCookie(response: Response, username: string, password: string): Response {
+async function withSessionCookie(response: Response, username: string, password: string): Promise<Response> {
   const headers = new Headers(response.headers);
-  headers.append("set-cookie", sessionCookie(username, password));
+  headers.append("set-cookie", await sessionCookie(username, password));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -123,16 +169,16 @@ export default async function requireBasicAuth(request: Request, context: Netlif
   const expectedPassword = Netlify.env.get("APP_BASIC_AUTH_PASSWORD");
   if (!expectedUsername || !expectedPassword) return unavailable(request);
 
-  if (hasValidSessionCookie(request, expectedUsername, expectedPassword)) return context.next();
+  if (await hasValidSessionCookie(request, expectedUsername, expectedPassword)) return context.next();
 
   const credentials = parseBasicAuth(request.headers.get("authorization"));
-  if (
-    !credentials ||
-    !constantTimeEquals(credentials.username, expectedUsername) ||
-    !constantTimeEquals(credentials.password, expectedPassword)
-  ) {
+  // Both comparisons always run: `&&` would short-circuit on a wrong username and leak
+  // which half failed through response timing.
+  const usernameMatches = constantTimeEquals(credentials?.username ?? "", expectedUsername);
+  const passwordMatches = constantTimeEquals(credentials?.password ?? "", expectedPassword);
+  if (!credentials || !usernameMatches || !passwordMatches) {
     return unauthorized(request);
   }
 
-  return withSessionCookie(await context.next(), expectedUsername, expectedPassword);
+  return await withSessionCookie(await context.next(), expectedUsername, expectedPassword);
 }

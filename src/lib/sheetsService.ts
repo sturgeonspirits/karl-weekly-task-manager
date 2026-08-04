@@ -5,6 +5,7 @@ import {
   eventKeyFromIsoDate,
   isInvalidTitle,
   isIsoDateKey,
+  makeId,
   normalizePriority,
   parseBoolean,
   sanitizeBills,
@@ -14,6 +15,24 @@ import {
   toLocalDateKey,
   weekIdFromDate,
 } from "../utils";
+import {
+  BILL_COLUMNS,
+  CATEGORY_COLUMNS,
+  columnReader,
+  DAILY_COLUMNS,
+  LEGACY_BILL_COLUMNS,
+  STAFF_COLUMNS,
+  STAFF_ROSTER_COLUMNS,
+  STAFF_TODO_COLUMNS,
+  TASK_COLUMNS,
+} from "./sheetSchema";
+import { isKarlAssignee } from "./ui";
+
+/** Trimmed value at a resolved column index; "" when the column is absent. */
+function cellAt(row: readonly string[], index: number): string {
+  if (index < 0) return "";
+  return String(row[index] ?? "").trim();
+}
 
 export const DEFAULT_PRIVATE_SHEET_ID = "1NQKvTSWvpTZ3uRsYWMUPAdOa_bHvsp_VMpc7EX1c_tI";
 export const DEFAULT_STAFF_TODOS_SHEET_ID = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
@@ -43,51 +62,75 @@ type AppsScriptPullResponse = {
   message?: string;
 };
 
-function isKarlAssigneeValue(value?: string): boolean {
-  const normalized = String(value || "").trim().toLowerCase();
-  return normalized === "karl" || normalized === "karl loewenstein" || normalized.startsWith("karl@");
-}
+const WITH_FALLBACK = { fallback: true } as const;
 
-function parseTasks(rows: string[][]): Task[] {
+export function parseTasks(rows: string[][]): Task[] {
+  const column = columnReader(TASK_COLUMNS, rows[0]);
+  const at = {
+    id: column.index("id", WITH_FALLBACK),
+    title: column.index("title", WITH_FALLBACK),
+    category: column.index("category", WITH_FALLBACK),
+    description: column.index("description", WITH_FALLBACK),
+    dayOfWeek: column.index("dayOfWeek", WITH_FALLBACK),
+    completed: column.index("completed", WITH_FALLBACK),
+    weekId: column.index("weekId", WITH_FALLBACK),
+    repeatsWeekly: column.index("repeatsWeekly", WITH_FALLBACK),
+    repeatPattern: column.index("repeatPattern", WITH_FALLBACK),
+    originTaskId: column.index("originTaskId", WITH_FALLBACK),
+    deleted: column.index("deleted", WITH_FALLBACK),
+    reminderDate: column.index("reminderDate", WITH_FALLBACK),
+    assignee: column.index("assignee", WITH_FALLBACK),
+    priority: column.index("priority", WITH_FALLBACK),
+    shiftHours: column.index("shiftHours", WITH_FALLBACK),
+    updatedAt: column.index("updatedAt", WITH_FALLBACK),
+  };
+
   let lastScheduledWeekId = "";
 
   return rows
     .slice(1)
-    .filter((row) => !isInvalidTitle(row[1]))
-    .filter((row) => !String(row[0] || "").startsWith("auto-def-") && !String(row[9] || "").startsWith("def-"))
+    .filter((row) => !isInvalidTitle(cellAt(row, at.title)))
+    .filter(
+      (row) => !cellAt(row, at.id).startsWith("auto-def-") && !cellAt(row, at.originTaskId).startsWith("def-")
+    )
     .map((row) => {
-      const dayOfWeek = Math.max(1, Math.min(7, Number(row[4] || 1)));
-      const repeatsWeekly = parseBoolean(row[7]);
+      const dayOfWeek = Math.max(1, Math.min(7, Number(cellAt(row, at.dayOfWeek) || 1)));
+      const repeatsWeekly = parseBoolean(cellAt(row, at.repeatsWeekly));
+      const rawRepeatPattern = cellAt(row, at.repeatPattern);
       const repeatPattern: Task["repeatPattern"] =
-        row[8] === "weekly" || row[8] === "biweekly" || row[8] === "monthly" ? row[8] : repeatsWeekly ? "weekly" : "none";
-      const rawWeekCell = String(row[6] || "").trim();
+        rawRepeatPattern === "weekly" || rawRepeatPattern === "biweekly" || rawRepeatPattern === "monthly"
+          ? rawRepeatPattern
+          : repeatsWeekly
+            ? "weekly"
+            : "none";
+      const rawWeekCell = cellAt(row, at.weekId);
       const rawWeekId = isIsoDateKey(rawWeekCell) ? rawWeekCell : "";
       if (rawWeekId) lastScheduledWeekId = rawWeekId;
-      const rawReminderCell = String(row[11] || "").trim();
+      const rawReminderCell = cellAt(row, at.reminderDate);
       const reminderDate = isIsoDateKey(rawReminderCell) ? rawReminderCell : undefined;
       const legacyNumericWeekValue = /^[1-7]$/.test(rawWeekCell);
       const weekId = rawWeekId || (legacyNumericWeekValue ? lastScheduledWeekId : "");
       const specificDate = weekId ? dateKeyForWeekDay(weekId, dayOfWeek) : undefined;
       const needsSheetRepair = legacyNumericWeekValue || Boolean(rawReminderCell && !reminderDate);
       return {
-        id: row[0] || crypto.randomUUID(),
-        title: row[1] || "",
-        category: row[2] || "Production",
-        description: row[3] || "",
+        id: cellAt(row, at.id) || makeId("task"),
+        title: cellAt(row, at.title),
+        category: cellAt(row, at.category) || "Production",
+        description: cellAt(row, at.description),
         dayOfWeek,
-        completed: parseBoolean(row[5]),
+        completed: parseBoolean(cellAt(row, at.completed)),
         weekId,
         repeatsWeekly: repeatsWeekly || repeatPattern !== "none",
         repeatPattern,
-        originTaskId: row[9] || undefined,
-        deleted: parseBoolean(row[10]),
+        originTaskId: cellAt(row, at.originTaskId) || undefined,
+        deleted: parseBoolean(cellAt(row, at.deleted)),
         specificDate,
         reminderDate,
         specificDateWasExplicit: false,
-        assignee: row[12] || undefined,
-        priority: normalizePriority(row[13]),
-        shiftHours: row[14] || undefined,
-        updatedAt: Number(row[15] || Date.now()),
+        assignee: cellAt(row, at.assignee) || undefined,
+        priority: normalizePriority(cellAt(row, at.priority)),
+        shiftHours: cellAt(row, at.shiftHours) || undefined,
+        updatedAt: Number(cellAt(row, at.updatedAt) || Date.now()),
         source: "private" as const,
         isGeneralReminder: !specificDate && repeatPattern === "none",
         needsSheetRepair,
@@ -95,16 +138,34 @@ function parseTasks(rows: string[][]): Task[] {
     });
 }
 
-function parseTodos(rows: string[][]): Task[] {
+export function parseTodos(rows: string[][]): Task[] {
   const todayKey = todayStr();
+  const column = columnReader(STAFF_TODO_COLUMNS, rows[0]);
+  const at = {
+    id: column.index("id", WITH_FALLBACK),
+    title: column.index("title", WITH_FALLBACK),
+    category: column.index("category", WITH_FALLBACK),
+    completed: column.index("completed", WITH_FALLBACK),
+    createdBy: column.index("createdBy", WITH_FALLBACK),
+    createdAt: column.index("createdAt", WITH_FALLBACK),
+    updatedAt: column.index("updatedAt", WITH_FALLBACK),
+    dueDate: column.index("dueDate", WITH_FALLBACK),
+    assignee: column.index("assignee", WITH_FALLBACK),
+    proof: column.index("proof", WITH_FALLBACK),
+    originTaskId: column.index("originTaskId", WITH_FALLBACK),
+    priority: column.index("priority", WITH_FALLBACK),
+    shiftHours: column.index("shiftHours", WITH_FALLBACK),
+  };
+
   return rows
     .slice(1)
-    .filter((row) => !isInvalidTitle(row[1]))
-    .filter((row) => !String(row[0] || "").startsWith("kwtm-"))
+    .filter((row) => !isInvalidTitle(cellAt(row, at.title)))
+    .filter((row) => !cellAt(row, at.id).startsWith("kwtm-"))
     .map((row) => {
-      const completed = parseBoolean(row[3]);
-      const hasExplicitDate = /^\d{4}-\d{2}-\d{2}$/.test(row[8] || "");
-      const sourceDate = hasExplicitDate ? row[8] : todayKey;
+      const completed = parseBoolean(cellAt(row, at.completed));
+      const rawDueDate = cellAt(row, at.dueDate);
+      const hasExplicitDate = isIsoDateKey(rawDueDate);
+      const sourceDate = hasExplicitDate ? rawDueDate : todayKey;
       const taskDate = !completed && sourceDate < todayKey ? todayKey : sourceDate;
       const date = new Date(`${taskDate}T12:00:00`);
       const day = date.getDay();
@@ -112,33 +173,36 @@ function parseTodos(rows: string[][]): Task[] {
       const monday = new Date(date);
       monday.setDate(date.getDate() - dayOfWeek + 1);
       const weekId = toLocalDateKey(monday);
-      const rawPriority = String(row[13] || "").toLowerCase();
+      const rawPriority = cellAt(row, at.priority).toLowerCase();
       const priority: Task["priority"] = rawPriority === "high" ? "high" : rawPriority === "low" ? "low" : "medium";
-      const assignee = row[10] || undefined;
-      const isKarlTodo = isKarlAssigneeValue(assignee);
+      const assignee = cellAt(row, at.assignee) || undefined;
+      const isKarlTodo = isKarlAssignee(assignee);
+      const createdBy = cellAt(row, at.createdBy);
+      const proof = cellAt(row, at.proof);
+      const rawId = cellAt(row, at.id);
       const descriptionParts = [
-        row[4] ? `Added by ${row[4]}` : "",
-        row[8] && row[8] !== taskDate ? `Original todo date: ${row[8]}` : "",
-        row[11] ? `Proof: ${row[11]}` : "",
+        createdBy ? `Added by ${createdBy}` : "",
+        rawDueDate && rawDueDate !== taskDate ? `Original todo date: ${rawDueDate}` : "",
+        proof ? `Proof: ${proof}` : "",
       ].filter(Boolean);
 
       return {
-        id: row[0] ? `staff-${row[0]}` : crypto.randomUUID(),
-        title: row[1] || "",
+        id: rawId ? `staff-${rawId}` : makeId("staff"),
+        title: cellAt(row, at.title),
         description: ["Staff/general todo", ...descriptionParts].join(". "),
         dayOfWeek,
         completed,
         priority,
-        category: row[2] || "Staff Todos",
+        category: cellAt(row, at.category) || "Staff Todos",
         weekId,
         repeatsWeekly: false,
         repeatPattern: "none",
-        originTaskId: row[12] || undefined,
+        originTaskId: cellAt(row, at.originTaskId) || undefined,
         deleted: false,
         specificDate: hasExplicitDate || isKarlTodo ? taskDate : undefined,
-        updatedAt: Date.parse(row[7] || row[5] || "") || Date.now(),
+        updatedAt: Date.parse(cellAt(row, at.updatedAt) || cellAt(row, at.createdAt) || "") || Date.now(),
         assignee,
-        shiftHours: row[14] || undefined,
+        shiftHours: cellAt(row, at.shiftHours) || undefined,
         source: "staff",
         isGeneralReminder: false,
       } satisfies Task;
@@ -146,13 +210,16 @@ function parseTodos(rows: string[][]): Task[] {
 }
 
 function parseDailyEvents(rows: string[][]): DailyEvents {
-  const headers = (rows[0] || []).map((header) => String(header || "").trim().toLowerCase());
-  const deletedIndex = headers.indexOf("deleted");
+  const column = columnReader(DAILY_COLUMNS, rows[0]);
+  const keyAt = column.index("key", WITH_FALLBACK);
+  const textAt = column.index("text", WITH_FALLBACK);
+  const deletedAt = column.index("deleted");
+
   const events: DailyEvents = {};
   rows.slice(1).forEach((row) => {
-    if (deletedIndex >= 0 && parseBoolean(row[deletedIndex])) return;
-    const rawKey = String(row[0] || "").trim();
-    const note = String(row[1] || "").trim();
+    if (deletedAt >= 0 && parseBoolean(cellAt(row, deletedAt))) return;
+    const rawKey = cellAt(row, keyAt);
+    const note = cellAt(row, textAt);
     if (!rawKey || !note) return;
     const key = normalizeDailyEventKey(rawKey);
     if (key) events[key] = events[key] ? `${events[key]}\n${note}` : note;
@@ -175,90 +242,129 @@ function normalizeDailyEventKey(rawKey: string): string | null {
 }
 
 function parseCategories(rows: string[][]): CategoryOption[] {
+  const column = columnReader(CATEGORY_COLUMNS, rows[0]);
+  const at = {
+    id: column.index("id", WITH_FALLBACK),
+    name: column.index("name", WITH_FALLBACK),
+    color: column.index("color", WITH_FALLBACK),
+  };
+
   return rows
     .slice(1)
-    .filter((row) => row[1])
-    .map((row) => ({
-      id: row[0] || row[1].toLowerCase().replace(/\s+/g, "-"),
-      name: row[1],
-      color: row[2] || "slate",
-    }));
+    .filter((row) => cellAt(row, at.name))
+    .map((row) => {
+      const name = cellAt(row, at.name);
+      return {
+        id: cellAt(row, at.id) || name.toLowerCase().replace(/\s+/g, "-"),
+        name,
+        color: cellAt(row, at.color) || "slate",
+      };
+    });
 }
 
-function parseBills(rows: string[][]): Bill[] {
-  const headers = (rows[0] || []).map((header) => String(header || "").trim().toLowerCase());
-  const indexOf = (name: string, fallback: number) => {
-    const index = headers.indexOf(name);
-    return index >= 0 ? index : fallback;
+export function parseBills(rows: string[][]): Bill[] {
+  // Sheets written before the payee/frequency columns existed use a different order, so
+  // pick the canonical layout from the header row before resolving positions.
+  const headerRow = rows[0];
+  const isModernLayout = columnReader(BILL_COLUMNS, headerRow).hasHeader("title");
+  const column = columnReader(isModernLayout ? BILL_COLUMNS : LEGACY_BILL_COLUMNS, headerRow);
+
+  const at = {
+    id: column.index("id", WITH_FALLBACK),
+    name: column.index(["title", "name"], WITH_FALLBACK),
+    amount: column.index("amount", WITH_FALLBACK),
+    dueDate: column.index("dueDate", WITH_FALLBACK),
+    category: column.index("category", WITH_FALLBACK),
+    status: column.index("status", WITH_FALLBACK),
+    recurring: column.index("recurring", WITH_FALLBACK),
+    updatedAt: column.index("updatedAt", WITH_FALLBACK),
+    // Header-only: an absent column means the data does not exist, so never guess a position.
+    payee: column.index("payee"),
+    frequency: column.index("frequency"),
+    autoPay: column.index("autoPay"),
+    paymentAccount: column.index("paymentAccount"),
+    notes: column.index("notes"),
+    deleted: column.index("deleted"),
   };
-  const idIndex = indexOf("id", 0);
-  const nameIndex = headers.includes("title") ? indexOf("title", 1) : indexOf("name", 1);
-  const payeeIndex = indexOf("payee", -1);
-  const amountIndex = indexOf("amount", headers.includes("title") ? 3 : 2);
-  const dueDateIndex = indexOf("duedate", headers.includes("title") ? 4 : 3);
-  const frequencyIndex = headers.indexOf("frequency");
-  const categoryIndex = indexOf("category", headers.includes("title") ? 6 : 5);
-  const statusIndex = indexOf("status", headers.includes("title") ? 7 : 4);
-  const autoPayIndex = headers.indexOf("autopay");
-  const paymentAccountIndex = headers.indexOf("paymentaccount");
-  const notesIndex = headers.indexOf("notes");
-  const recurringIndex = indexOf("recurring", 6);
-  const updatedAtIndex = indexOf("updatedat", headers.includes("title") ? 11 : 7);
-  const deletedIndex = headers.indexOf("deleted");
 
   return sanitizeBills(
     rows
       .slice(1)
-      .filter((row) => row[nameIndex])
+      .filter((row) => cellAt(row, at.name))
       .map((row) => {
-        const frequency = frequencyIndex >= 0 ? String(row[frequencyIndex] || "").trim() : "";
-        const status = String(row[statusIndex] || "").trim();
+        const frequency = cellAt(row, at.frequency);
+        const status = cellAt(row, at.status);
         return {
-          id: row[idIndex] || crypto.randomUUID(),
-          name: row[nameIndex],
-          payee: payeeIndex >= 0 ? row[payeeIndex] || undefined : undefined,
-          amount: Number(String(row[amountIndex] || "0").replace(/[$,]/g, "")) || 0,
-          dueDate: row[dueDateIndex] || "",
+          id: cellAt(row, at.id) || makeId("bill"),
+          name: cellAt(row, at.name),
+          payee: cellAt(row, at.payee) || undefined,
+          amount: Number(cellAt(row, at.amount).replace(/[$,]/g, "")) || 0,
+          dueDate: cellAt(row, at.dueDate),
           paid: parseBoolean(status) || status.toLowerCase() === "paid",
-          category: row[categoryIndex] || undefined,
-          recurring: parseBoolean(row[recurringIndex]) || (frequency ? frequency.toLowerCase() !== "one-time" : false),
+          category: cellAt(row, at.category) || undefined,
+          recurring:
+            parseBoolean(cellAt(row, at.recurring)) || (frequency ? frequency.toLowerCase() !== "one-time" : false),
           frequency: frequency || undefined,
           status: status || undefined,
-          autoPay: autoPayIndex >= 0 ? parseBoolean(row[autoPayIndex]) : undefined,
-          paymentAccount: paymentAccountIndex >= 0 ? row[paymentAccountIndex] || undefined : undefined,
-          notes: notesIndex >= 0 ? row[notesIndex] || undefined : undefined,
-          updatedAt: Number(row[updatedAtIndex] || Date.now()),
-          deleted: deletedIndex >= 0 ? parseBoolean(row[deletedIndex]) : false,
+          autoPay: at.autoPay >= 0 ? parseBoolean(cellAt(row, at.autoPay)) : undefined,
+          paymentAccount: cellAt(row, at.paymentAccount) || undefined,
+          notes: cellAt(row, at.notes) || undefined,
+          updatedAt: Number(cellAt(row, at.updatedAt) || Date.now()),
+          deleted: parseBoolean(cellAt(row, at.deleted)),
         };
       })
   );
 }
 
 function parseStaff(rows: string[][]): StaffMember[] {
+  const column = columnReader(STAFF_COLUMNS, rows[0]);
+  const at = {
+    id: column.index("id", WITH_FALLBACK),
+    name: column.index("name", WITH_FALLBACK),
+    role: column.index("role", WITH_FALLBACK),
+    email: column.index("email", WITH_FALLBACK),
+    phone: column.index("phone", WITH_FALLBACK),
+    color: column.index("color", WITH_FALLBACK),
+  };
+
   return rows
     .slice(1)
-    .filter((row) => row[1])
-    .map((row) => ({
-      id: row[0] || row[1].toLowerCase().replace(/\s+/g, "-"),
-      name: row[1],
-      role: row[2] || "Staff",
-      email: row[3] || undefined,
-      phone: row[4] || undefined,
-      color: row[5] || "slate",
-    }));
+    .filter((row) => cellAt(row, at.name))
+    .map((row) => {
+      const name = cellAt(row, at.name);
+      return {
+        id: cellAt(row, at.id) || name.toLowerCase().replace(/\s+/g, "-"),
+        name,
+        role: cellAt(row, at.role) || "Staff",
+        email: cellAt(row, at.email) || undefined,
+        phone: cellAt(row, at.phone) || undefined,
+        color: cellAt(row, at.color) || "slate",
+      };
+    });
 }
 
-function parseStaffRoster(rows: string[][]): StaffMember[] {
+export function parseStaffRoster(rows: string[][]): StaffMember[] {
+  const column = columnReader(STAFF_ROSTER_COLUMNS, rows[0]);
+  const at = {
+    email: column.index("email", WITH_FALLBACK),
+    name: column.index("name", WITH_FALLBACK),
+    manager: column.index("manager", WITH_FALLBACK),
+  };
+
   return rows
     .slice(1)
-    .filter((row) => row[1] || row[0])
-    .map((row, index) => ({
-      id: row[0] || `staff-roster-${index}`,
-      name: row[1] || row[0],
-      role: parseBoolean(row[2]) ? "Manager" : "Staff",
-      email: row[0] || undefined,
-      color: parseBoolean(row[2]) ? "violet" : "sky",
-    }));
+    .filter((row) => cellAt(row, at.name) || cellAt(row, at.email))
+    .map((row, index) => {
+      const email = cellAt(row, at.email);
+      const isManager = parseBoolean(cellAt(row, at.manager));
+      return {
+        id: email || `staff-roster-${index}`,
+        name: cellAt(row, at.name) || email,
+        role: isManager ? "Manager" : "Staff",
+        email: email || undefined,
+        color: isManager ? "violet" : "sky",
+      };
+    });
 }
 
 async function syncFunctionFetch<T>(action: string, payload: Record<string, unknown>): Promise<T> {
