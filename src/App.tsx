@@ -35,12 +35,13 @@ import {
   weekIdFromDate,
 } from "./utils";
 import { isKarlAssignee } from "./lib/ui";
-import { STORAGE_KEY } from "./lib/storage";
+import { LAST_SYNCED_STORAGE_KEY, STORAGE_KEY } from "./lib/storage";
 import { hasAnySyncedData, hasPrivateOperationsData, isPrivateTask, isStaffTask } from "./lib/taskPredicates";
 
 
 const AUTO_PULL_MS = 60_000;
 const AUTO_SAVE_MS = 2_500;
+const AUTO_SAVE_RETRY_MS = 30_000;
 const SHEET_SYNC_CONFIG: AppsScriptSyncConfig = {
   privateSheetId: DEFAULT_PRIVATE_SHEET_ID,
   staffTodosSheetId: DEFAULT_STAFF_TODOS_SHEET_ID,
@@ -119,6 +120,30 @@ function loadSnapshot(weekId: string): OperationsSnapshot {
   }
 }
 
+function readLocalStorageValue(key: string): string {
+  try {
+    return localStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeLocalStorageValue(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The in-memory refs still keep this tab safe; persistence will resume when storage works.
+  }
+}
+
+function removeLocalStorageValue(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Nothing useful to do here; the next successful sync rewrites the marker.
+  }
+}
+
 export default function App() {
   const [weekId, setWeekId] = useState(() => weekIdFromDate(new Date()));
   const [activeView, setActiveView] = useState<ActiveView>(initialActiveView);
@@ -133,10 +158,19 @@ export default function App() {
   const [syncError, setSyncError] = useState("");
   const autoPullStartedRef = useRef(false);
   const autoSaveTimerRef = useRef<number | null>(null);
+  const retrySaveTimerRef = useRef<number | null>(null);
   const syncReadyRef = useRef(false);
   const syncInFlightRef = useRef(false);
   const remoteSnapshotJsonRef = useRef("");
-  const lastSavedSnapshotJsonRef = useRef(JSON.stringify(snapshot));
+  const initialSnapshotJson = JSON.stringify(snapshot);
+  const cachedSnapshotExistsRef = useRef(Boolean(readLocalStorageValue(STORAGE_KEY)));
+  const storedLastSyncedSnapshotRef = useRef(readLocalStorageValue(LAST_SYNCED_STORAGE_KEY));
+  const hasUnconfirmedCachedSnapshotRef = useRef(
+    cachedSnapshotExistsRef.current && !storedLastSyncedSnapshotRef.current && hasAnySyncedData(snapshot)
+  );
+  const lastSavedSnapshotJsonRef = useRef(
+    hasUnconfirmedCachedSnapshotRef.current ? "" : storedLastSyncedSnapshotRef.current || initialSnapshotJson
+  );
 
   // Serialising the snapshot is O(size of everything), so do it once per change and share
   // the result between the cache write and the autosave dirty check.
@@ -151,7 +185,7 @@ export default function App() {
   }, [snapshot]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, snapshotJson);
+    writeLocalStorageValue(STORAGE_KEY, snapshotJson);
   }, [snapshotJson]);
 
   const scheduledTasks = useMemo(
@@ -324,16 +358,25 @@ export default function App() {
   function resetLocalData() {
     if (!window.confirm("Reload this app from Google Sheets? Local browser cache will be cleared, but nothing will be saved to Sheets.")) return;
     if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    if (retrySaveTimerRef.current) window.clearTimeout(retrySaveTimerRef.current);
     autoSaveTimerRef.current = null;
+    retrySaveTimerRef.current = null;
     syncReadyRef.current = false;
     remoteSnapshotJsonRef.current = "";
     lastSavedSnapshotJsonRef.current = JSON.stringify(snapshotRef.current);
-    localStorage.removeItem(STORAGE_KEY);
+    removeLocalStorageValue(STORAGE_KEY);
+    removeLocalStorageValue(LAST_SYNCED_STORAGE_KEY);
     setSyncStatus("Local cache cleared. Refreshing from Google Sheets...");
     void pullSheets();
   }
 
   const pullSheets = useCallback(async (silent = false) => {
+    const pendingSnapshot = snapshotRef.current;
+    const pendingSnapshotJson = JSON.stringify(pendingSnapshot);
+    if (hasAnySyncedData(pendingSnapshot) && lastSavedSnapshotJsonRef.current !== pendingSnapshotJson) {
+      if (!silent) setSyncStatus("Local changes are waiting to sync before the next refresh.");
+      return;
+    }
     if (syncInFlightRef.current) return;
     syncInFlightRef.current = true;
     setSyncBusy(true);
@@ -345,6 +388,8 @@ export default function App() {
       const needsSheetRepair = nextSnapshot.tasks.some((task) => task.needsSheetRepair);
       remoteSnapshotJsonRef.current = needsSheetRepair ? "" : pulledJson;
       lastSavedSnapshotJsonRef.current = needsSheetRepair ? "" : pulledJson;
+      if (needsSheetRepair) removeLocalStorageValue(LAST_SYNCED_STORAGE_KEY);
+      else writeLocalStorageValue(LAST_SYNCED_STORAGE_KEY, pulledJson);
       syncReadyRef.current = true;
       setSnapshot(nextSnapshot);
       setSyncStatus(needsSheetRepair ? "Sheets refreshed; cleanup queued." : silent ? "Autosync refreshed from Sheets." : "Sheets refreshed.");
@@ -362,6 +407,10 @@ export default function App() {
     if (syncInFlightRef.current) {
       autoSaveTimerRef.current = window.setTimeout(() => autoSaveSnapshot(snapshotToSave, snapshotJson), AUTO_SAVE_MS);
       return;
+    }
+    if (retrySaveTimerRef.current) {
+      window.clearTimeout(retrySaveTimerRef.current);
+      retrySaveTimerRef.current = null;
     }
 
     syncInFlightRef.current = true;
@@ -385,13 +434,24 @@ export default function App() {
       await pushAppsScriptStaffTodos(SHEET_SYNC_CONFIG, staffTodos);
       await pushAppsScriptStaffSchedule(SHEET_SYNC_CONFIG, weekId, scheduledTasksForWeek, snapshotForSave.staff);
       lastSavedSnapshotJsonRef.current = normalizedSnapshotJson;
+      writeLocalStorageValue(LAST_SYNCED_STORAGE_KEY, normalizedSnapshotJson);
+      hasUnconfirmedCachedSnapshotRef.current = false;
       setSyncStatus("Autosaved to Sheets.");
       setSyncError("");
     } catch (error) {
       setSyncStatus("");
       setSyncError(
-        `Not saved to Sheets: ${error instanceof Error ? error.message : "unknown error"}. Your changes are still in this browser; they will retry on the next edit.`
+        `Not saved to Sheets: ${error instanceof Error ? error.message : "unknown error"}. Your changes are still in this browser and will retry automatically.`
       );
+      if (retrySaveTimerRef.current) window.clearTimeout(retrySaveTimerRef.current);
+      retrySaveTimerRef.current = window.setTimeout(() => {
+        retrySaveTimerRef.current = null;
+        if (!syncReadyRef.current) return;
+        const current = snapshotRef.current;
+        const currentJson = JSON.stringify(current);
+        if (lastSavedSnapshotJsonRef.current === currentJson) return;
+        void autoSaveSnapshot(current, currentJson);
+      }, AUTO_SAVE_RETRY_MS);
     } finally {
       autoSaveTimerRef.current = null;
       syncInFlightRef.current = false;
@@ -402,8 +462,15 @@ export default function App() {
   useEffect(() => {
     if (autoPullStartedRef.current) return;
     autoPullStartedRef.current = true;
+    if (hasUnconfirmedCachedSnapshotRef.current || lastSavedSnapshotJsonRef.current !== JSON.stringify(snapshotRef.current)) {
+      syncReadyRef.current = true;
+      setSyncStatus("Saving browser changes to Sheets...");
+      const current = snapshotRef.current;
+      void autoSaveSnapshot(current, JSON.stringify(current));
+      return;
+    }
     void pullSheets();
-  }, [pullSheets]);
+  }, [autoSaveSnapshot, pullSheets]);
 
   useEffect(() => {
     setSnapshot((current) => {
@@ -417,11 +484,20 @@ export default function App() {
   // being cleared and restarted on every keystroke.
   useEffect(() => {
     const interval = window.setInterval(() => {
-      if (document.visibilityState !== "visible" || autoSaveTimerRef.current) return;
+      if (document.visibilityState !== "visible" || autoSaveTimerRef.current || retrySaveTimerRef.current) return;
+      const current = snapshotRef.current;
+      const currentJson = JSON.stringify(current);
+      if (lastSavedSnapshotJsonRef.current !== currentJson) {
+        if (hasAnySyncedData(current) && !syncInFlightRef.current) {
+          syncReadyRef.current = true;
+          void autoSaveSnapshot(current, currentJson);
+        }
+        return;
+      }
       void pullSheets(true);
     }, AUTO_PULL_MS);
     return () => window.clearInterval(interval);
-  }, [pullSheets]);
+  }, [autoSaveSnapshot, pullSheets]);
 
   useEffect(() => {
     if (remoteSnapshotJsonRef.current === snapshotJson) {
@@ -431,15 +507,94 @@ export default function App() {
     if (!syncReadyRef.current || lastSavedSnapshotJsonRef.current === snapshotJson) return;
 
     if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    if (retrySaveTimerRef.current) {
+      window.clearTimeout(retrySaveTimerRef.current);
+      retrySaveTimerRef.current = null;
+    }
     setSyncStatus("Autosave queued...");
     autoSaveTimerRef.current = window.setTimeout(() => {
       void autoSaveSnapshot(snapshot, snapshotJson);
     }, AUTO_SAVE_MS);
   }, [autoSaveSnapshot, snapshot]);
 
+  // Mobile browsers can keep reporting "online" while individual cellular requests fail.
+  // Push as soon as the connection returns; pull first if there was nothing pending.
+  useEffect(() => {
+    function handleOnline() {
+      if (!syncReadyRef.current) {
+        const current = snapshotRef.current;
+        const currentJson = JSON.stringify(current);
+        if (hasAnySyncedData(current) && lastSavedSnapshotJsonRef.current !== currentJson) {
+          syncReadyRef.current = true;
+          setSyncStatus("Back online. Saving...");
+          void autoSaveSnapshot(current, currentJson);
+          return;
+        }
+        void pullSheets(true);
+        return;
+      }
+      const pending = lastSavedSnapshotJsonRef.current !== JSON.stringify(snapshotRef.current);
+      if (!pending) {
+        void pullSheets(true);
+        return;
+      }
+      if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+      if (retrySaveTimerRef.current) {
+        window.clearTimeout(retrySaveTimerRef.current);
+        retrySaveTimerRef.current = null;
+      }
+      setSyncStatus("Back online. Saving...");
+      autoSaveTimerRef.current = window.setTimeout(() => {
+        const current = snapshotRef.current;
+        void autoSaveSnapshot(current, JSON.stringify(current));
+      }, 0);
+    }
+
+    function handleOffline() {
+      setSyncStatus("");
+      setSyncError("Offline. Changes are saved in this browser and will sync when the connection returns.");
+    }
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [autoSaveSnapshot, pullSheets]);
+
+  useEffect(() => {
+    function retryPendingSave() {
+      if (document.visibilityState !== "visible" || syncInFlightRef.current) return;
+      const current = snapshotRef.current;
+      const currentJson = JSON.stringify(current);
+      if (lastSavedSnapshotJsonRef.current === currentJson) return;
+      if (!hasAnySyncedData(current)) return;
+      syncReadyRef.current = true;
+      if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+      if (retrySaveTimerRef.current) {
+        window.clearTimeout(retrySaveTimerRef.current);
+        retrySaveTimerRef.current = null;
+      }
+      setSyncStatus("Saving pending browser changes...");
+      autoSaveTimerRef.current = window.setTimeout(() => {
+        const latest = snapshotRef.current;
+        void autoSaveSnapshot(latest, JSON.stringify(latest));
+      }, 0);
+    }
+
+    document.addEventListener("visibilitychange", retryPendingSave);
+    window.addEventListener("focus", retryPendingSave);
+    return () => {
+      document.removeEventListener("visibilitychange", retryPendingSave);
+      window.removeEventListener("focus", retryPendingSave);
+    };
+  }, [autoSaveSnapshot]);
+
   useEffect(
     () => () => {
       if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+      if (retrySaveTimerRef.current) window.clearTimeout(retrySaveTimerRef.current);
     },
     []
   );
