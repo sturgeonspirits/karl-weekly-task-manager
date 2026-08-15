@@ -89,6 +89,42 @@ describe("ensureRecurringTasksForWeek", () => {
     expect(result.filter((item) => item.weekId === "2026-08-10")).toHaveLength(1);
   });
 
+  it("does not recreate the original date after a generated monthly occurrence is moved", () => {
+    const result = ensureRecurringTasksForWeek(
+      [
+        task({
+          id: "monthly-state-reporting",
+          title: "monthly state reporting due",
+          dayOfWeek: 2,
+          weekId: "2026-07-13",
+          specificDate: "2026-07-14",
+          repeatsWeekly: true,
+          repeatPattern: "monthly",
+          updatedAt: 100,
+        }),
+        task({
+          id: "auto-monthly-state-reporting-2026-08-10",
+          originTaskId: "monthly-state-reporting",
+          title: "monthly state reporting due",
+          dayOfWeek: 3,
+          weekId: "2026-08-10",
+          specificDate: "2026-08-12",
+          repeatsWeekly: true,
+          repeatPattern: "monthly",
+          specificDateWasExplicit: true,
+          updatedAt: 200,
+        }),
+      ],
+      "2026-08-10"
+    );
+
+    expect(result.filter((item) => item.title === "monthly state reporting due" && item.weekId === "2026-08-10")).toHaveLength(1);
+    expect(result.find((item) => item.id === "auto-monthly-state-reporting-2026-08-10")).toMatchObject({
+      specificDate: "2026-08-12",
+      dayOfWeek: 3,
+    });
+  });
+
   it("uses the latest matching recurring template", () => {
     const result = ensureRecurringTasksForWeek(
       [

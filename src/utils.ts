@@ -131,6 +131,11 @@ function stableRecurringId(task: Task): string {
   return task.originTaskId || task.id.replace(/^auto-/, "").replace(/-\d{4}-\d{2}-\d{2}$/, "");
 }
 
+function generatedOccurrenceWeekId(task: Task): string | undefined {
+  const match = task.id.match(/^auto-.+-(\d{4}-\d{2}-\d{2})$/);
+  return isIsoDateKey(match?.[1]) ? match[1] : undefined;
+}
+
 function weekDistance(startWeekId: string, targetWeekId: string): number {
   const msPerWeek = 7 * 24 * 60 * 60 * 1000;
   return Math.round((dateFromKey(targetWeekId).getTime() - dateFromKey(startWeekId).getTime()) / msPerWeek);
@@ -169,11 +174,18 @@ export function ensureRecurringTasksForWeek(tasks: Task[], targetWeekId: string)
   if (!isIsoDateKey(targetWeekId)) return tasks;
 
   const existingKeys = new Set(tasks.map((task) => `${stableRecurringId(task)}|${task.weekId}|${task.dayOfWeek}`));
+  const existingOccurrenceWeeks = new Set<string>();
+  tasks.forEach((task) => {
+    const stableId = stableRecurringId(task);
+    if (isIsoDateKey(task.weekId)) existingOccurrenceWeeks.add(`${stableId}|${task.weekId}`);
+    const generatedWeekId = generatedOccurrenceWeekId(task);
+    if (generatedWeekId) existingOccurrenceWeeks.add(`${stableId}|${generatedWeekId}`);
+  });
   const templates = new Map<string, Task>();
 
   tasks.forEach((task) => {
     if (!recurringTaskFallsOnWeek(task, targetWeekId)) return;
-    const key = `${stableRecurringId(task)}|${task.dayOfWeek}`;
+    const key = stableRecurringId(task);
     const existing = templates.get(key);
     if (
       !existing ||
@@ -185,7 +197,11 @@ export function ensureRecurringTasksForWeek(tasks: Task[], targetWeekId: string)
   });
 
   const generated = Array.from(templates.values())
-    .filter((task) => !existingKeys.has(`${stableRecurringId(task)}|${targetWeekId}|${task.dayOfWeek}`))
+    .filter(
+      (task) =>
+        !existingKeys.has(`${stableRecurringId(task)}|${targetWeekId}|${task.dayOfWeek}`) &&
+        !existingOccurrenceWeeks.has(`${stableRecurringId(task)}|${targetWeekId}`)
+    )
     .map((task) => {
       const originTaskId = stableRecurringId(task);
       return {
