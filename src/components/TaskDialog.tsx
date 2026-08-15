@@ -132,6 +132,7 @@ export function TaskDialog({
       originTaskId: task?.originTaskId,
       deleted: task?.deleted,
       specificDate: form.isGeneralReminder || !hasScheduledDate ? undefined : form.scheduledDate,
+      specificDateWasExplicit: hasScheduledDate,
       updatedAt: Date.now(),
       assignee: form.assignee.trim() || undefined,
       shiftHours: form.shiftHours.trim() || undefined,

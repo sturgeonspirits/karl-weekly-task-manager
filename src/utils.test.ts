@@ -364,6 +364,25 @@ describe("sanitizeTasks", () => {
     });
   });
 
+  it("preserves an explicit edited date and recomputes its week and day", () => {
+    const [result] = sanitizeTasks([
+      task({
+        weekId: "2026-08-03",
+        dayOfWeek: 1,
+        specificDate: "2026-08-12",
+        specificDateWasExplicit: true,
+      }),
+    ]);
+
+    expect(result).toMatchObject({
+      weekId: "2026-08-10",
+      dayOfWeek: 3,
+      specificDate: "2026-08-12",
+      specificDateWasExplicit: true,
+      isGeneralReminder: false,
+    });
+  });
+
   it("normalizes legacy repeatsWeekly tasks to weekly repeat pattern", () => {
     const [result] = sanitizeTasks([task({ repeatsWeekly: true, repeatPattern: "none", isGeneralReminder: true })]);
 

@@ -37,6 +37,7 @@ function cellAt(row: readonly string[], index: number): string {
 export const DEFAULT_PRIVATE_SHEET_ID = "1NQKvTSWvpTZ3uRsYWMUPAdOa_bHvsp_VMpc7EX1c_tI";
 export const DEFAULT_STAFF_TODOS_SHEET_ID = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 export const APPS_SCRIPT_SYNC_FUNCTION = "/.netlify/functions/sheets-sync";
+const SYNC_REQUEST_TIMEOUT_MS = 50_000;
 
 export type AppsScriptSyncConfig = {
   privateSheetId: string;
@@ -367,21 +368,44 @@ export function parseStaffRoster(rows: string[][]): StaffMember[] {
     });
 }
 
-async function syncFunctionFetch<T>(action: string, payload: Record<string, unknown>): Promise<T> {
-  const response = await fetch(APPS_SCRIPT_SYNC_FUNCTION, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...payload }),
-  });
+function isAbortError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
+}
 
-  const text = await response.text();
+function isLocalHostname(): boolean {
+  const hostname = typeof window === "undefined" ? "" : window.location.hostname;
+  return hostname === "localhost" || hostname === "127.0.0.1";
+}
+
+async function syncFunctionFetch<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  let text: string;
+
+  try {
+    response = await fetch(APPS_SCRIPT_SYNC_FUNCTION, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...payload }),
+      signal: controller.signal,
+    });
+    text = await response.text();
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(`Sheet sync timed out after ${Math.round(SYNC_REQUEST_TIMEOUT_MS / 1000)} seconds.`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+
   let data: { ok?: boolean; error?: string; message?: string };
   try {
     data = JSON.parse(text);
   } catch {
-    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    if (isLocal) {
+    if (isLocalHostname()) {
       throw new Error("Sheet sync is not available from this local Vite server. Use the deployed Netlify site or run with Netlify Dev.");
     }
     throw new Error(`Sheet sync endpoint returned ${response.status || "a non-JSON response"}. Refresh the page and sign in again if prompted.`);

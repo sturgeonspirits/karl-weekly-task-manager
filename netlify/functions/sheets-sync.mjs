@@ -4,6 +4,7 @@
 // copies must be kept in agreement by hand. Change one, change all three.
 
 const ALLOWED_ACTIONS = new Set(["pull", "pushOperations", "pushStaffTodos", "pushStaffSchedule"]);
+const APPS_SCRIPT_FETCH_TIMEOUT_MS = 45_000;
 
 function hasRecordKeys(record) {
   return Object.keys(record || {}).length > 0;
@@ -28,6 +29,10 @@ function json(statusCode, body) {
     },
     body: JSON.stringify(body),
   };
+}
+
+function isAbortError(error) {
+  return error && error.name === "AbortError";
 }
 
 export async function handler(event) {
@@ -62,6 +67,9 @@ export async function handler(event) {
     });
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), APPS_SCRIPT_FETCH_TIMEOUT_MS);
+
   try {
     const response = await fetch(syncUrl, {
       method: "POST",
@@ -71,6 +79,7 @@ export async function handler(event) {
         app: "karl-weekly-task-manager",
         token: syncToken,
       }),
+      signal: controller.signal,
     });
 
     const text = await response.text();
@@ -87,6 +96,11 @@ export async function handler(event) {
 
     return json(200, data);
   } catch (error) {
+    if (isAbortError(error)) {
+      return json(504, { ok: false, error: "Apps Script sync timed out before returning a response." });
+    }
     return json(502, { ok: false, error: error instanceof Error ? error.message : "Apps Script sync failed." });
+  } finally {
+    clearTimeout(timeout);
   }
 }

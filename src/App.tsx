@@ -248,7 +248,7 @@ export default function App() {
       ...task,
       source,
       specificDate,
-      specificDateWasExplicit: false,
+      specificDateWasExplicit: Boolean(task.specificDateWasExplicit && specificDate),
       repeatsWeekly: isGeneralReminder ? false : task.repeatsWeekly,
       repeatPattern: isGeneralReminder ? "none" : task.repeatPattern || "none",
       assignee: source === "private" ? task.assignee || undefined : task.assignee,

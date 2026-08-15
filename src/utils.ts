@@ -216,10 +216,15 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
       const rawWeekId = isIsoDateKey(task.weekId) ? task.weekId : undefined;
       let dayOfWeek = Math.max(1, Math.min(7, Number(task.dayOfWeek) || 1));
       const importedSpecificDate = isIsoDateKey(task.specificDate) ? task.specificDate : undefined;
+      const hasExplicitSpecificDate = Boolean(task.specificDateWasExplicit && importedSpecificDate);
       const reminderDate =
-        isIsoDateKey(task.reminderDate) ? task.reminderDate : source === "private" && !rawWeekId ? importedSpecificDate : undefined;
-      let specificDate = source === "private" ? undefined : importedSpecificDate;
-      const specificDateWasExplicit = false;
+        isIsoDateKey(task.reminderDate)
+          ? task.reminderDate
+          : source === "private" && !rawWeekId && !hasExplicitSpecificDate
+            ? importedSpecificDate
+            : undefined;
+      let specificDate = source === "private" && !hasExplicitSpecificDate ? undefined : importedSpecificDate;
+      const specificDateWasExplicit = Boolean(hasExplicitSpecificDate);
 
       // An undated reminder is given the current week below purely so it has a weekId to
       // sort by. That stamp must never be read back as a schedule on a later pass, or the
@@ -228,7 +233,7 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
       // repeating implies a schedule, which is what makes them not reminders.
       const staysUndated = source === "private" && Boolean(task.isGeneralReminder) && !repeatsWeekly;
 
-      if (source === "private" && rawWeekId && !staysUndated) {
+      if (source === "private" && rawWeekId && !staysUndated && !hasExplicitSpecificDate) {
         specificDate = dateKeyForWeekDay(rawWeekId, dayOfWeek);
       }
 
@@ -237,7 +242,7 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
         dayOfWeek = day === 0 ? 7 : day;
       }
 
-      const weekId = rawWeekId || (specificDate ? weekIdFromDate(dateFromKey(specificDate)) : weekIdFromDate(new Date()));
+      const weekId = specificDate ? weekIdFromDate(dateFromKey(specificDate)) : rawWeekId || weekIdFromDate(new Date());
       const isGeneralReminder = source === "staff" ? false : Boolean(!specificDate && (task.isGeneralReminder || !repeatsWeekly));
 
       return {
