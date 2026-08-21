@@ -50,6 +50,9 @@ export const STAFF_TODO_COLUMNS = [
   "shiftHours",
 ] as const;
 
+// v1.1 -- 2026-08-21 -- `amountPaid` appended for partial payments. It goes last on
+// purpose: existing sheets keep every column where it already is, and rows written before
+// this release simply have no value in the new column.
 export const BILL_COLUMNS = [
   "id",
   "title",
@@ -64,6 +67,7 @@ export const BILL_COLUMNS = [
   "notes",
   "updatedAt",
   "deleted",
+  "amountPaid",
 ] as const;
 
 /** Older Bills layout, still present in sheets that predate the `title`/`payee` columns. */

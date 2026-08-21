@@ -105,6 +105,39 @@ describe("parseTasks", () => {
 });
 
 describe("parseBills", () => {
+  // v1.1 -- 2026-08-21 -- Partial payments.
+  it("reads a part-paid bill as unpaid with a balance", () => {
+    const row = [
+      "b-partial", "Bottle invoice", "Glass Co", "1000", "2026-08-10", "one-time",
+      "Supplies", "partial", "FALSE", "Checking", "", "1700", "FALSE", "400",
+    ];
+
+    expect(parseBills([[...BILL_COLUMNS], row])[0]).toMatchObject({
+      id: "b-partial",
+      amount: 1000,
+      amountPaid: 400,
+      paid: false,
+    });
+  });
+
+  it("settles a bill whose recorded payments cover it", () => {
+    const row = [
+      "b-covered", "Bottle invoice", "", "250", "2026-08-10", "one-time",
+      "", "partial", "FALSE", "", "", "1700", "FALSE", "250",
+    ];
+
+    expect(parseBills([[...BILL_COLUMNS], row])[0]).toMatchObject({ paid: true, amountPaid: 250 });
+  });
+
+  it("treats a sheet with no amountPaid column as nothing paid", () => {
+    const row = [
+      "b-legacy", "Bottle invoice", "", "250", "2026-08-10", "one-time",
+      "", "upcoming", "FALSE", "", "", "1700", "FALSE",
+    ];
+
+    expect(parseBills([[...BILL_COLUMNS], row])[0]).toMatchObject({ paid: false, amountPaid: 0 });
+  });
+
   it("parses the current Bills layout", () => {
     const row = [
       "b-1",

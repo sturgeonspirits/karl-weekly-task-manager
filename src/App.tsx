@@ -22,6 +22,7 @@ import {
 import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "./types";
 import {
   addDays,
+  billRemaining,
   dateFromKey,
   dateKeyForWeekDay,
   deduplicateTasks,
@@ -220,7 +221,10 @@ export default function App() {
   const completed = activeWeekTasks.filter((task) => task.completed).length;
   const highPriority = activeWeekTasks.filter((task) => !task.completed && task.priority === "high").length;
   const assigned = activeWeekTasks.filter((task) => !task.completed && task.assignee).length;
-  const outstandingBills = snapshot.bills.filter((bill) => !bill.deleted && !bill.paid).reduce((sum, bill) => sum + bill.amount, 0);
+  // v1.1 -- 2026-08-21 -- Sum what is still owed, so part-paid bills stop overstating the header total.
+  const outstandingBills = snapshot.bills
+    .filter((bill) => !bill.deleted)
+    .reduce((sum, bill) => sum + billRemaining(bill), 0);
 
   /**
    * Every task mutation goes through here. The updater receives the freshest task list

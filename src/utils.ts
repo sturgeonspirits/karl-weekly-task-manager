@@ -282,19 +282,93 @@ export function sanitizeTasks(tasks: Task[]): Task[] {
     .filter((task) => shouldRetainSoftDeletedRecord(task));
 }
 
+/**
+ * Reconciles the "Recurring" checkbox with the `frequency` column.
+ *
+ * sanitizeBills treats any frequency other than "one-time" as recurring, so simply
+ * setting `recurring: false` is not enough -- a bill still carrying frequency "monthly"
+ * would flip straight back to recurring on the next pass. Unticking the box has to clear
+ * the frequency too.
+ */
+export function frequencyForRecurringChoice(recurring: boolean, currentFrequency?: string): string | undefined {
+  if (!recurring) return "one-time";
+  const current = String(currentFrequency || "").trim();
+  // Keep a specific cadence like "quarterly"; otherwise leave it unset and let the sheet
+  // writer default it to monthly.
+  return current && current.toLowerCase() !== "one-time" ? current : undefined;
+}
+
+/**
+ * v1.1 -- 2026-08-21 -- Partial payments.
+ * Rounds to whole cents so repeated partial payments do not drift (0.1 + 0.2 = 0.30000000000000004).
+ */
+export function roundCurrency(value: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.round(numeric * 100) / 100;
+}
+
+/**
+ * v1.1 -- 2026-08-21 -- Partial payments.
+ * Dollars paid so far, clamped into [0, amount]. A bill flagged `paid` counts as fully
+ * paid even when it carries no `amountPaid` -- that is every bill written before this
+ * field existed.
+ */
+export function billAmountPaid(bill: Bill): number {
+  const amount = Math.max(0, roundCurrency(bill.amount));
+  if (bill.paid) return amount;
+  const paidSoFar = Math.max(0, roundCurrency(bill.amountPaid ?? 0));
+  return Math.min(paidSoFar, amount);
+}
+
+/** v1.1 -- 2026-08-21 -- Dollars still owed on a bill. */
+export function billRemaining(bill: Bill): number {
+  return roundCurrency(Math.max(0, roundCurrency(bill.amount) - billAmountPaid(bill)));
+}
+
+/** v1.1 -- 2026-08-21 -- True when something has been paid but the bill is not settled. */
+export function isPartiallyPaid(bill: Bill): boolean {
+  return !bill.paid && billAmountPaid(bill) > 0;
+}
+
+/**
+ * v1.1 -- 2026-08-21 -- Partial payments.
+ * Applies a payment and returns the updated bill, marking it paid once the balance is
+ * cleared. A non-positive or non-numeric payment leaves the bill untouched.
+ */
+export function applyBillPayment(bill: Bill, payment: number): Bill {
+  const amount = roundCurrency(payment);
+  if (!(amount > 0)) return bill;
+  const amountPaid = Math.min(roundCurrency(billAmountPaid(bill) + amount), Math.max(0, roundCurrency(bill.amount)));
+  return {
+    ...bill,
+    amountPaid,
+    paid: amountPaid >= Math.max(0, roundCurrency(bill.amount)),
+    updatedAt: Date.now(),
+  };
+}
+
 export function sanitizeBills(bills: Bill[]): Bill[] {
   return bills
-    .map((bill): Bill => ({
-      ...bill,
-      name: String(bill.name || "").trim(),
-      payee: bill.payee || undefined,
-      amount: Number(bill.amount || 0),
-      dueDate: bill.dueDate || "",
-      paid: Boolean(bill.paid),
-      recurring: Boolean(bill.recurring || (bill.frequency && bill.frequency.toLowerCase() !== "one-time")),
-      deleted: Boolean(bill.deleted),
-      updatedAt: bill.updatedAt || Date.now(),
-    }))
+    .map((bill): Bill => {
+      const amount = roundCurrency(bill.amount || 0);
+      // Clamp first, then let a cleared balance imply "paid" -- and let an explicit
+      // `paid` flag imply a full payment -- so the two fields can never disagree.
+      const clampedPaid = Math.min(Math.max(0, roundCurrency(bill.amountPaid ?? 0)), Math.max(0, amount));
+      const paid = Boolean(bill.paid) || (amount > 0 && clampedPaid >= amount);
+      return {
+        ...bill,
+        name: String(bill.name || "").trim(),
+        payee: bill.payee || undefined,
+        amount,
+        dueDate: bill.dueDate || "",
+        paid,
+        amountPaid: paid ? Math.max(0, amount) : clampedPaid,
+        recurring: Boolean(bill.recurring || (bill.frequency && bill.frequency.toLowerCase() !== "one-time")),
+        deleted: Boolean(bill.deleted),
+        updatedAt: bill.updatedAt || Date.now(),
+      };
+    })
     .filter((bill) => Boolean(bill.name && isIsoDateKey(bill.dueDate)))
     .filter((bill) => shouldRetainSoftDeletedRecord(bill));
 }

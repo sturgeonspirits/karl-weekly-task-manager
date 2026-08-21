@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bill, Task } from "./types";
 import {
+  applyBillPayment,
+  billAmountPaid,
+  billRemaining,
   deduplicateTasks,
   ensureRecurringTasksForWeek,
+  frequencyForRecurringChoice,
+  isPartiallyPaid,
+  roundCurrency,
   sanitizeBills,
   sanitizeDailyEvents,
   sanitizeTasks,
@@ -503,5 +509,138 @@ describe("sanitizeBills", () => {
     const [result] = sanitizeBills([bill({ deleted: true, updatedAt: recentUpdatedAt })]);
 
     expect(result.deleted).toBe(true);
+  });
+
+  it("lets an edited bill change amount and due date", () => {
+    const [result] = sanitizeBills([bill({ amount: 400, dueDate: "2026-09-01" })]);
+
+    expect(result).toMatchObject({ amount: 400, dueDate: "2026-09-01" });
+  });
+});
+
+// v1.1 -- 2026-08-21 -- Partial payments.
+describe("partial bill payments", () => {
+  it("reports nothing paid on a fresh bill", () => {
+    expect(billAmountPaid(bill())).toBe(0);
+    expect(billRemaining(bill())).toBe(100);
+    expect(isPartiallyPaid(bill())).toBe(false);
+  });
+
+  it("treats a legacy paid bill with no amountPaid as paid in full", () => {
+    const legacy = bill({ paid: true });
+
+    expect(billAmountPaid(legacy)).toBe(100);
+    expect(billRemaining(legacy)).toBe(0);
+    expect(isPartiallyPaid(legacy)).toBe(false);
+  });
+
+  it("records a partial payment without settling the bill", () => {
+    const result = applyBillPayment(bill(), 40);
+
+    expect(result.amountPaid).toBe(40);
+    expect(result.paid).toBe(false);
+    expect(billRemaining(result)).toBe(60);
+    expect(isPartiallyPaid(result)).toBe(true);
+  });
+
+  it("accumulates payments and settles the bill once the balance clears", () => {
+    const afterFirst = applyBillPayment(bill(), 40);
+    const afterSecond = applyBillPayment(afterFirst, 60);
+
+    expect(afterSecond.amountPaid).toBe(100);
+    expect(afterSecond.paid).toBe(true);
+    expect(billRemaining(afterSecond)).toBe(0);
+  });
+
+  it("never lets payments exceed the bill amount", () => {
+    const result = applyBillPayment(bill(), 250);
+
+    expect(result.amountPaid).toBe(100);
+    expect(result.paid).toBe(true);
+  });
+
+  it("ignores a zero, negative, or non-numeric payment", () => {
+    const original = bill();
+
+    expect(applyBillPayment(original, 0)).toBe(original);
+    expect(applyBillPayment(original, -25)).toBe(original);
+    expect(applyBillPayment(original, Number.NaN)).toBe(original);
+  });
+
+  it("does not drift on repeated fractional payments", () => {
+    // Three payments of 0.10 against a 0.30 bill must land exactly on paid, not on
+    // 0.30000000000000004, which would leave a phantom balance forever.
+    const cents = bill({ amount: 0.3 });
+    const result = [0.1, 0.1, 0.1].reduce((current, payment) => applyBillPayment(current, payment), cents);
+
+    expect(result.amountPaid).toBe(0.3);
+    expect(result.paid).toBe(true);
+    expect(billRemaining(result)).toBe(0);
+  });
+
+  it("rounds stray floating point values to whole cents", () => {
+    expect(roundCurrency(0.1 + 0.2)).toBe(0.3);
+    expect(roundCurrency(Number.NaN)).toBe(0);
+  });
+
+  it("clamps an over-large amountPaid through sanitizeBills", () => {
+    const [result] = sanitizeBills([bill({ amountPaid: 500 })]);
+
+    expect(result.amountPaid).toBe(100);
+    expect(result.paid).toBe(true);
+  });
+
+  it("keeps paid and amountPaid consistent through sanitizeBills", () => {
+    const [settled] = sanitizeBills([bill({ paid: true })]);
+    const [covered] = sanitizeBills([bill({ amountPaid: 100 })]);
+    const [partial] = sanitizeBills([bill({ amountPaid: 25 })]);
+
+    expect(settled.amountPaid).toBe(100);
+    expect(covered.paid).toBe(true);
+    expect(partial.paid).toBe(false);
+    expect(partial.amountPaid).toBe(25);
+  });
+
+  it("reopens a balance when an edit raises the bill amount", () => {
+    // Paying 100 of a 100 bill settles it; correcting the invoice to 150 must leave 50
+    // owed rather than keeping the bill closed.
+    const settled = applyBillPayment(bill(), 100);
+    const [corrected] = sanitizeBills([{ ...settled, amount: 150, paid: false }]);
+
+    expect(corrected.amountPaid).toBe(100);
+    expect(corrected.paid).toBe(false);
+    expect(billRemaining(corrected)).toBe(50);
+  });
+});
+
+describe("frequencyForRecurringChoice", () => {
+  it("clears the frequency when recurring is switched off", () => {
+    expect(frequencyForRecurringChoice(false, "monthly")).toBe("one-time");
+  });
+
+  it("keeps a specific cadence when recurring stays on", () => {
+    expect(frequencyForRecurringChoice(true, "quarterly")).toBe("quarterly");
+  });
+
+  it("leaves the frequency unset when switching recurring on from one-time", () => {
+    expect(frequencyForRecurringChoice(true, "one-time")).toBeUndefined();
+    expect(frequencyForRecurringChoice(true, undefined)).toBeUndefined();
+  });
+
+  it("makes unticking recurring actually stick through sanitizeBills", () => {
+    // Without clearing the frequency, sanitizeBills reads "monthly" and flips recurring
+    // back on, so the checkbox would appear to do nothing.
+    const edited = bill({
+      recurring: false,
+      frequency: frequencyForRecurringChoice(false, "monthly"),
+    });
+
+    expect(sanitizeBills([edited])[0].recurring).toBe(false);
+  });
+
+  it("keeps a recurring bill recurring through sanitizeBills", () => {
+    const edited = bill({ recurring: true, frequency: frequencyForRecurringChoice(true, "monthly") });
+
+    expect(sanitizeBills([edited])[0].recurring).toBe(true);
   });
 });

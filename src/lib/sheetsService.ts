@@ -286,6 +286,8 @@ export function parseBills(rows: string[][]): Bill[] {
     paymentAccount: column.index("paymentAccount"),
     notes: column.index("notes"),
     deleted: column.index("deleted"),
+    // v1.1 -- 2026-08-21 -- Partial payments; header-only, absent on older sheets.
+    amountPaid: column.index("amountPaid"),
   };
 
   return sanitizeBills(
@@ -295,6 +297,7 @@ export function parseBills(rows: string[][]): Bill[] {
       .map((row) => {
         const frequency = cellAt(row, at.frequency);
         const status = cellAt(row, at.status);
+        const rawAmountPaid = cellAt(row, at.amountPaid).replace(/[$,]/g, "");
         return {
           id: cellAt(row, at.id) || makeId("bill"),
           name: cellAt(row, at.name),
@@ -302,6 +305,8 @@ export function parseBills(rows: string[][]): Bill[] {
           amount: Number(cellAt(row, at.amount).replace(/[$,]/g, "")) || 0,
           dueDate: cellAt(row, at.dueDate),
           paid: parseBoolean(status) || status.toLowerCase() === "paid",
+          // v1.1 -- 2026-08-21 -- sanitizeBills clamps this against `amount`.
+          amountPaid: rawAmountPaid ? Number(rawAmountPaid) || 0 : undefined,
           category: cellAt(row, at.category) || undefined,
           recurring:
             parseBoolean(cellAt(row, at.recurring)) || (frequency ? frequency.toLowerCase() !== "one-time" : false),

@@ -38,6 +38,12 @@ export interface Bill {
   amount: number;
   dueDate: string;
   paid: boolean;
+  /**
+   * v1.1 -- 2026-08-21 -- Partial payments.
+   * Dollars paid against this bill so far. Always between 0 and `amount`; equals `amount`
+   * whenever `paid` is true. Absent on bills that predate partial payments (treat as 0).
+   */
+  amountPaid?: number;
   category?: string;
   recurring?: boolean;
   frequency?: string;

@@ -242,6 +242,55 @@ describe("Code.gs", () => {
       expect(row[6]).toBe(""); // weekId
     });
 
+    // v1.1 -- 2026-08-21 -- Partial payments must survive the trip through the sheet.
+    it("round-trips a part-paid bill through the Bills tab", async () => {
+      const { parseBills } = await import("../src/lib/sheetsService");
+
+      script.KWTM_writeOperations_(config, {
+        tasks: [{ id: "t-1", title: "Keep the write non-empty", category: "Production", weekId: "2026-08-03", dayOfWeek: 3, updatedAt: 1 }],
+        bills: [
+          { id: "b-1", name: "Bottle invoice", amount: 1000, amountPaid: 400, dueDate: "2026-08-10", paid: false, updatedAt: 1700 },
+        ],
+        dailyEvents: {},
+        categories: [],
+      });
+
+      const rows = sheets.getSheetByName("Bills")!.rows() as string[][];
+      const header = rows[0];
+      expect(header).toContain("amountPaid");
+      expect(rows[1][header.indexOf("status")]).toBe("partial");
+
+      expect(parseBills(rows.map((row) => row.map((cell) => String(cell ?? ""))))[0]).toMatchObject({
+        id: "b-1",
+        amount: 1000,
+        amountPaid: 400,
+        paid: false,
+      });
+    });
+
+    // v1.1 -- 2026-08-21 -- A status pulled back from the sheet must not outlive the
+    // payments that produced it.
+    it("recomputes a stale partial status instead of carrying it back", () => {
+      script.KWTM_writeOperations_(config, {
+        tasks: [{ id: "t-1", title: "Keep the write non-empty", category: "Production", weekId: "2026-08-03", dayOfWeek: 3, updatedAt: 1 }],
+        bills: [
+          // What "Clear payments" leaves behind: no money against the bill, but the
+          // status the previous sync wrote is still attached to the pulled record.
+          { id: "b-1", name: "Bottle invoice", amount: 1000, amountPaid: 0, status: "partial", dueDate: "2026-08-10", paid: false, updatedAt: 1700 },
+          { id: "b-2", name: "Hop contract", amount: 500, amountPaid: 100, status: "disputed", dueDate: "2026-08-12", paid: false, updatedAt: 1700 },
+        ],
+        dailyEvents: {},
+        categories: [],
+      });
+
+      const rows = sheets.getSheetByName("Bills")!.rows() as string[][];
+      const status = rows[0].indexOf("status");
+
+      expect(rows[1][status]).toBe("upcoming");
+      // A status a human typed into the sheet is not one of ours to overwrite.
+      expect(rows[2][status]).toBe("disputed");
+    });
+
     it("excludes staff-sourced tasks from the private Tasks tab", () => {
       script.KWTM_writeOperations_(config, {
         tasks: [

@@ -1,5 +1,5 @@
-// KWTM_SCRIPT_VERSION: 2026-08-04.5
-// KWTM_SCRIPT_UPDATED_AT: 2026-08-04
+// KWTM_SCRIPT_VERSION: 2026-08-21.1
+// KWTM_SCRIPT_UPDATED_AT: 2026-08-21
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
 /*
@@ -19,13 +19,13 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-08-04.5
- * - KWTM_SCRIPT_UPDATED_AT 2026-08-04
+ * - KWTM_SCRIPT_VERSION 2026-08-21.1
+ * - KWTM_SCRIPT_UPDATED_AT 2026-08-21
  * - Open the deployed web app URL in a browser to confirm the live script version.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-08-04.5";
-var KWTM_SCRIPT_UPDATED_AT = "2026-08-04";
+var KWTM_SCRIPT_VERSION = "2026-08-21.1";
+var KWTM_SCRIPT_UPDATED_AT = "2026-08-21";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 var KWTM_SOFT_DELETE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 var KWTM_BACKUP_RETENTION_DAYS = 8;
@@ -69,6 +69,8 @@ var KWTM_BILL_HEADERS = [
   "notes",
   "updatedAt",
   "deleted",
+  // v1.1 -- 2026-08-21 -- Partial payments. Mirrors BILL_COLUMNS in src/lib/sheetSchema.ts.
+  "amountPaid",
 ];
 var KWTM_STAFF_HEADERS = ["id", "name", "role", "email", "phone", "color"];
 var KWTM_STAFF_SCHEDULE_HEADERS = [
@@ -339,6 +341,7 @@ function KWTM_writeOperations_(config, snapshot) {
           bill.notes || "",
           bill.updatedAt || new Date().getTime(),
           bill.deleted ? "TRUE" : "FALSE",
+          KWTM_billAmountPaidForSheet_(bill),
         ];
       })
     ),
@@ -711,10 +714,30 @@ function KWTM_billFrequencyForSheet_(bill) {
   return bill.recurring ? "monthly" : "one-time";
 }
 
+// v1.1 -- 2026-08-21 -- Partial payments: a bill with money against it but a balance
+// left reads as "partial" in the sheet instead of "upcoming".
+//
+// The three statuses this app derives -- paid, partial, upcoming -- are always recomputed
+// from the current amounts. A status pulled from the sheet is only passed through when a
+// human wrote something else there ("disputed"), so clearing a bill's payments cannot
+// leave a stale "partial" sitting next to an amountPaid of 0 forever.
 function KWTM_billStatusForSheet_(bill) {
   if (bill.paid) return "paid";
-  if (bill.status && String(bill.status).toLowerCase() !== "paid") return bill.status;
+  var current = bill.status ? String(bill.status).toLowerCase() : "";
+  var isDerived = current === "" || current === "paid" || current === "partial" || current === "upcoming";
+  if (!isDerived) return bill.status;
+  if (KWTM_billAmountPaidForSheet_(bill) > 0) return "partial";
   return "upcoming";
+}
+
+// v1.1 -- 2026-08-21 -- Dollars paid so far, clamped to the bill amount.
+function KWTM_billAmountPaidForSheet_(bill) {
+  var amount = Number(bill.amount || 0);
+  if (!isFinite(amount) || amount < 0) amount = 0;
+  if (bill.paid) return amount;
+  var paidSoFar = Number(bill.amountPaid || 0);
+  if (!isFinite(paidSoFar) || paidSoFar < 0) paidSoFar = 0;
+  return Math.min(paidSoFar, amount);
 }
 
 function KWTM_staffTodoPriorityForSheet_(priority) {
