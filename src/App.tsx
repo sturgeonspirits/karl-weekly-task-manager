@@ -14,9 +14,7 @@ import {
   DEFAULT_STAFF_TODOS_SHEET_ID,
   mergeDailyEventSets,
   pullAppsScriptSnapshot,
-  pushAppsScriptOperations,
-  pushAppsScriptStaffSchedule,
-  pushAppsScriptStaffTodos,
+  pushAppsScriptAll,
   type AppsScriptSyncConfig,
 } from "./lib/sheetsService";
 import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "./types";
@@ -43,6 +41,15 @@ import { hasAnySyncedData, hasPrivateOperationsData, isPrivateTask, isStaffTask 
 const AUTO_PULL_MS = 60_000;
 const AUTO_SAVE_MS = 2_500;
 const AUTO_SAVE_RETRY_MS = 30_000;
+
+// A sync still marked in flight after this long is not running any more. The in-flight flag
+// is cleared in a `finally`, which is reliable only if the promise settles -- and it does
+// not always settle. Backgrounding an installed PWA (or an iOS tab) freezes pending timers
+// and kills the underlying request without rejecting the fetch, so the `finally` never
+// runs, the flag stays true forever, and every later autosave silently re-queues itself
+// behind it. The symptom is the status line stuck on "Autosave queued..." with no error and
+// no saving, until the page is reloaded. Treating a stale flag as clear breaks that.
+const SYNC_STALL_MS = 60_000;
 const SHEET_SYNC_CONFIG: AppsScriptSyncConfig = {
   privateSheetId: DEFAULT_PRIVATE_SHEET_ID,
   staffTodosSheetId: DEFAULT_STAFF_TODOS_SHEET_ID,
@@ -162,6 +169,7 @@ export default function App() {
   const retrySaveTimerRef = useRef<number | null>(null);
   const syncReadyRef = useRef(false);
   const syncInFlightRef = useRef(false);
+  const syncStartedAtRef = useRef(0);
   const remoteSnapshotJsonRef = useRef("");
   const initialSnapshotJson = JSON.stringify(snapshot);
   const cachedSnapshotExistsRef = useRef(Boolean(readLocalStorageValue(STORAGE_KEY)));
@@ -374,6 +382,30 @@ export default function App() {
     void pullSheets();
   }
 
+  // Always ask through these three rather than touching syncInFlightRef directly, so the
+  // staleness rule above applies at every call site.
+  const isSyncInFlight = useCallback(() => {
+    if (!syncInFlightRef.current) return false;
+    if (Date.now() - syncStartedAtRef.current < SYNC_STALL_MS) return true;
+    // The previous sync was abandoned mid-flight. Its `finally` may still run later; that
+    // is harmless, since it only clears flags this call has already cleared.
+    syncInFlightRef.current = false;
+    syncStartedAtRef.current = 0;
+    return false;
+  }, []);
+
+  const beginSync = useCallback(() => {
+    syncInFlightRef.current = true;
+    syncStartedAtRef.current = Date.now();
+    setSyncBusy(true);
+  }, []);
+
+  const endSync = useCallback(() => {
+    syncInFlightRef.current = false;
+    syncStartedAtRef.current = 0;
+    setSyncBusy(false);
+  }, []);
+
   const pullSheets = useCallback(async (silent = false) => {
     const pendingSnapshot = snapshotRef.current;
     const pendingSnapshotJson = JSON.stringify(pendingSnapshot);
@@ -381,9 +413,8 @@ export default function App() {
       if (!silent) setSyncStatus("Local changes are waiting to sync before the next refresh.");
       return;
     }
-    if (syncInFlightRef.current) return;
-    syncInFlightRef.current = true;
-    setSyncBusy(true);
+    if (isSyncInFlight()) return;
+    beginSync();
     if (!silent) setSyncStatus("Refreshing from Google Sheets...");
     try {
       const pulledSnapshot = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshotRef.current);
@@ -402,14 +433,21 @@ export default function App() {
       setSyncStatus("");
       setSyncError(`Could not refresh from Sheets: ${error instanceof Error ? error.message : "unknown error"}`);
     } finally {
-      syncInFlightRef.current = false;
-      setSyncBusy(false);
+      endSync();
     }
-  }, [weekId]);
+  }, [weekId, beginSync, endSync, isSyncInFlight]);
 
   const autoSaveSnapshot = useCallback(async (snapshotToSave: OperationsSnapshot, snapshotJson: string) => {
-    if (syncInFlightRef.current) {
-      autoSaveTimerRef.current = window.setTimeout(() => autoSaveSnapshot(snapshotToSave, snapshotJson), AUTO_SAVE_MS);
+    if (isSyncInFlight()) {
+      // Re-queue against the newest snapshot, not the one captured when this attempt was
+      // scheduled -- otherwise a save that waits out a slow pull writes back stale rows.
+      // The status changes too, so a long wait is visibly a wait rather than looking
+      // identical to a queued save that is about to run.
+      setSyncStatus("Waiting for the current sync to finish...");
+      autoSaveTimerRef.current = window.setTimeout(() => {
+        const latest = snapshotRef.current;
+        void autoSaveSnapshot(latest, JSON.stringify(latest));
+      }, AUTO_SAVE_MS);
       return;
     }
     if (retrySaveTimerRef.current) {
@@ -417,8 +455,8 @@ export default function App() {
       retrySaveTimerRef.current = null;
     }
 
-    syncInFlightRef.current = true;
-    setSyncBusy(true);
+    const ownedTimerId = autoSaveTimerRef.current;
+    beginSync();
     setSyncStatus("Autosaving to Sheets...");
     try {
       const snapshotForSave = { ...snapshotToSave, tasks: normalizeTasksForWeek(snapshotToSave.tasks, weekId) };
@@ -432,16 +470,23 @@ export default function App() {
         (task) => task.weekId === weekId && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate)
       );
       const staffTodos = snapshotForSave.tasks.filter(shouldSendToStaffTodosSync);
-      if (hasPrivateOperationsData(snapshotForSave)) {
-        await pushAppsScriptOperations(SHEET_SYNC_CONFIG, snapshotForSave);
-      }
-      await pushAppsScriptStaffTodos(SHEET_SYNC_CONFIG, staffTodos);
-      await pushAppsScriptStaffSchedule(SHEET_SYNC_CONFIG, weekId, scheduledTasksForWeek, snapshotForSave.staff);
+      // One round trip for the whole save. Three separate pushes meant three Apps Script
+      // executions contending for one script lock, per save, per open client.
+      const pushResult = await pushAppsScriptAll(SHEET_SYNC_CONFIG, {
+        snapshot: snapshotForSave,
+        staffTodos,
+        weekId,
+        scheduledTasks: scheduledTasksForWeek,
+        staff: snapshotForSave.staff,
+      });
       lastSavedSnapshotJsonRef.current = normalizedSnapshotJson;
       writeLocalStorageValue(LAST_SYNCED_STORAGE_KEY, normalizedSnapshotJson);
       hasUnconfirmedCachedSnapshotRef.current = false;
-      setSyncStatus("Autosaved to Sheets.");
-      setSyncError("");
+      // Your own sheet saved, but a staff mirror did not. Worth saying out loud -- silently
+      // succeeding would let the staff board drift for days without anyone noticing.
+      const warnings = pushResult?.warnings || [];
+      setSyncStatus(warnings.length ? "Autosaved to Sheets, but a staff mirror did not update." : "Autosaved to Sheets.");
+      setSyncError(warnings.length ? `Staff sheet not updated: ${warnings.join("; ")}` : "");
     } catch (error) {
       setSyncStatus("");
       setSyncError(
@@ -457,11 +502,13 @@ export default function App() {
         void autoSaveSnapshot(current, currentJson);
       }, AUTO_SAVE_RETRY_MS);
     } finally {
-      autoSaveTimerRef.current = null;
-      syncInFlightRef.current = false;
-      setSyncBusy(false);
+      // Only clear the queue marker if nothing was scheduled while this save ran. Blanking
+      // it unconditionally used to hide a live timer from every `if (autoSaveTimerRef.current)
+      // clearTimeout(...)` guard, leaving two timers racing to write different snapshots.
+      if (autoSaveTimerRef.current === ownedTimerId) autoSaveTimerRef.current = null;
+      endSync();
     }
-  }, [weekId]);
+  }, [weekId, beginSync, endSync, isSyncInFlight]);
 
   useEffect(() => {
     if (autoPullStartedRef.current) return;
@@ -492,7 +539,7 @@ export default function App() {
       const current = snapshotRef.current;
       const currentJson = JSON.stringify(current);
       if (lastSavedSnapshotJsonRef.current !== currentJson) {
-        if (hasAnySyncedData(current) && !syncInFlightRef.current) {
+        if (hasAnySyncedData(current) && !isSyncInFlight()) {
           syncReadyRef.current = true;
           void autoSaveSnapshot(current, currentJson);
         }
@@ -501,7 +548,7 @@ export default function App() {
       void pullSheets(true);
     }, AUTO_PULL_MS);
     return () => window.clearInterval(interval);
-  }, [autoSaveSnapshot, pullSheets]);
+  }, [autoSaveSnapshot, pullSheets, isSyncInFlight]);
 
   useEffect(() => {
     if (remoteSnapshotJsonRef.current === snapshotJson) {
@@ -569,7 +616,7 @@ export default function App() {
 
   useEffect(() => {
     function retryPendingSave() {
-      if (document.visibilityState !== "visible" || syncInFlightRef.current) return;
+      if (document.visibilityState !== "visible" || isSyncInFlight()) return;
       const current = snapshotRef.current;
       const currentJson = JSON.stringify(current);
       if (lastSavedSnapshotJsonRef.current === currentJson) return;
@@ -593,7 +640,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", retryPendingSave);
       window.removeEventListener("focus", retryPendingSave);
     };
-  }, [autoSaveSnapshot]);
+  }, [autoSaveSnapshot, isSyncInFlight]);
 
   useEffect(
     () => () => {

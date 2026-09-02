@@ -10,7 +10,7 @@
  * The fakes deliberately mimic Sheets' quirks that the script depends on:
  *  - getLastRow/getLastColumn report the extent of *data*, not the grid size
  *  - getRange beyond the grid throws, which is why Code.gs calls ensureSheetSize first
- *  - deleteRow shifts every row below it up by one
+ *  - deleteRow/deleteRows shift every row below the deletion up
  */
 
 export type CellValue = string | number | boolean | Date | null;
@@ -90,8 +90,12 @@ export class FakeSheet {
   }
 
   deleteRow(rowNumber: number): void {
-    this.grid.splice(rowNumber - 1, 1);
-    this.maxRows -= 1;
+    this.deleteRows(rowNumber, 1);
+  }
+
+  deleteRows(rowNumber: number, howMany: number): void {
+    this.grid.splice(rowNumber - 1, howMany);
+    this.maxRows -= howMany;
   }
 
   getRange(row: number, column: number, numRows = 1, numColumns = 1) {
@@ -212,6 +216,7 @@ export function createEnvironment(options: {
   properties?: Record<string, string>;
   active?: FakeSpreadsheet;
   timeZone?: string;
+  lockAvailable?: boolean;
 } = {}): AppsScriptEnvironment {
   const spreadsheets = new Map(Object.entries(options.spreadsheets || {}));
   const properties = { ...(options.properties || {}) };
@@ -240,9 +245,30 @@ export function createEnvironment(options: {
     },
   };
 
+  // `lockAvailable: false` stands in for another execution already holding the script lock,
+  // so the busy-and-retryable path can be tested without real concurrency.
+  const lockAvailable = options.lockAvailable !== false;
   const LockService = {
     getScriptLock() {
-      return { waitLock: () => undefined, releaseLock: () => undefined };
+      return {
+        waitLock: () => undefined,
+        tryLock: () => lockAvailable,
+        releaseLock: () => undefined,
+      };
+    },
+  };
+
+  /** Enough of ContentService for the request layer: the tests read .getContent() back. */
+  const ContentService = {
+    MimeType: { JSON: "application/json" },
+    createTextOutput(content: string) {
+      const output = {
+        getContent: () => content,
+        setMimeType() {
+          return output;
+        },
+      };
+      return output;
     },
   };
 
@@ -259,6 +285,6 @@ export function createEnvironment(options: {
   return {
     spreadsheets,
     properties,
-    globals: { SpreadsheetApp, PropertiesService, LockService, Utilities, Session },
+    globals: { SpreadsheetApp, PropertiesService, LockService, ContentService, Utilities, Session },
   };
 }

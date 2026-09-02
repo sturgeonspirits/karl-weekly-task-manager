@@ -147,11 +147,21 @@ describe("Code.gs", () => {
     });
   });
 
+  // Backups run from a daily time-driven trigger, not from the save path -- a full copy of
+  // four tabs has no business making the user's first save of the day wait for it.
   describe("backups", () => {
-    it("copies the tab into a dated hidden backup before writing", () => {
+    it("is not taken on the write path", () => {
       seedTasks([taskRow("t-1", "Original", 1000)]);
 
       upsertTasks([taskRow("t-1", "Changed", 2000)]);
+
+      expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-04")).toBeNull();
+    });
+
+    it("copies the tab into a dated hidden backup when the daily job runs", () => {
+      seedTasks([taskRow("t-1", "Original", 1000)]);
+
+      script.KWTM_dailyBackup();
 
       const backup = sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-04");
       expect(backup).not.toBeNull();
@@ -159,23 +169,24 @@ describe("Code.gs", () => {
       expect(backup!.rows()[1][1]).toBe("Original");
     });
 
-    it("does not overwrite the day's backup on a later save", () => {
+    it("does not overwrite the day's backup if the job runs twice", () => {
       seedTasks([taskRow("t-1", "Morning state", 1000)]);
+      script.KWTM_dailyBackup();
 
-      upsertTasks([taskRow("t-1", "Midday", 2000)]);
       upsertTasks([taskRow("t-1", "Evening", 3000)]);
+      script.KWTM_dailyBackup();
 
-      const backup = sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-04")!;
-      expect(backup.rows()[1][1]).toBe("Morning state");
+      expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-04")!.rows()[1][1]).toBe("Morning state");
       expect(sheets.getSheetByName("Tasks")!.rows()[1][1]).toBe("Evening");
     });
 
     it("keeps a separate backup per day", () => {
       seedTasks([taskRow("t-1", "Day one", 1000)]);
-      upsertTasks([taskRow("t-1", "Day one edit", 2000)]);
+      script.KWTM_dailyBackup();
 
+      upsertTasks([taskRow("t-1", "Day one edit", 2000)]);
       vi.setSystemTime(new Date("2026-08-05T12:00:00Z"));
-      upsertTasks([taskRow("t-1", "Day two edit", 3000)]);
+      script.KWTM_dailyBackup();
 
       expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-04")!.rows()[1][1]).toBe("Day one");
       expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-05")!.rows()[1][1]).toBe("Day one edit");
@@ -186,17 +197,17 @@ describe("Code.gs", () => {
       sheets.add(FakeSheet.from("_KWTM Backup - Tasks - 2026-08-02", [["recent"]]));
       seedTasks([taskRow("t-1", "Now", 1000)]);
 
-      upsertTasks([taskRow("t-1", "Now edited", 2000)]);
+      script.KWTM_dailyBackup();
 
       expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-07-01")).toBeNull();
       expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-02")).not.toBeNull();
     });
 
-    it("does not touch backups belonging to a different tab", () => {
+    it("does not touch backups belonging to a different tab than the one being pruned", () => {
       sheets.add(FakeSheet.from("_KWTM Backup - Bills - 2026-07-01", [["other tab"]]));
       seedTasks([taskRow("t-1", "Now", 1000)]);
 
-      upsertTasks([taskRow("t-1", "Now edited", 2000)]);
+      script.KWTM_dailyBackup();
 
       expect(sheets.getSheetByName("_KWTM Backup - Bills - 2026-07-01")).not.toBeNull();
     });
@@ -315,6 +326,280 @@ describe("Code.gs", () => {
 
       expect(narrow.getMaxColumns()).toBeGreaterThanOrEqual(16);
       expect(narrow.rows()[1][1]).toBe("Wide row");
+    });
+  });
+
+  describe("unchanged rows", () => {
+    it("leaves a row alone when only its timestamp differs", () => {
+      // Events carry no per-note timestamp, so every push stamps them "now". Rewriting an
+      // untouched note would hand this client precedence over another client's real edit.
+      const events = sheets.add(
+        FakeSheet.from("Events", [
+          ["key", "text", "updatedAt", "deleted"],
+          ["2026-08-04", "Delivery at 9", "5000", "FALSE"],
+        ])
+      );
+
+      script.KWTM_upsertRows_(
+        sheets,
+        "Events",
+        [
+          ["key", "text", "updatedAt", "deleted"],
+          ["2026-08-04", "Delivery at 9", "9999", "FALSE"],
+        ],
+        0,
+        2,
+        3
+      );
+
+      expect(events.rows()[1][2]).toBe("5000");
+    });
+
+    it("still writes when the text actually changed", () => {
+      const events = sheets.add(
+        FakeSheet.from("Events", [
+          ["key", "text", "updatedAt", "deleted"],
+          ["2026-08-04", "Delivery at 9", "5000", "FALSE"],
+        ])
+      );
+
+      script.KWTM_upsertRows_(
+        sheets,
+        "Events",
+        [
+          ["key", "text", "updatedAt", "deleted"],
+          ["2026-08-04", "Delivery at 11", "9999", "FALSE"],
+        ],
+        0,
+        2,
+        3
+      );
+
+      expect(events.rows()[1][1]).toBe("Delivery at 11");
+      expect(events.rows()[1][2]).toBe("9999");
+    });
+
+    it("keeps columns the sheet has beyond the ones this script manages", () => {
+      const wide = sheets.add(
+        FakeSheet.from("Tasks", [
+          [...TASK_HEADERS, "myNotes"],
+          [...taskRow("t-1", "Original", 1000), "hand-typed"],
+        ])
+      );
+
+      upsertTasks([taskRow("t-1", "Edited", 2000)]);
+
+      const rows = wide.rows();
+      expect(rows[1][1]).toBe("Edited");
+      expect(rows[1][16]).toBe("hand-typed");
+    });
+  });
+
+  describe("tab resolution", () => {
+    it("writes back to the tab it read from rather than creating the canonical name", () => {
+      // A workbook whose tasks live in "Task List" used to be read from there and written
+      // to a brand new "Tasks" tab, so the app and the sheet quietly diverged.
+      sheets.add(FakeSheet.from("Task List", [TASK_HEADERS, taskRow("t-1", "Existing", 1000)]));
+
+      script.KWTM_writeOperations_(
+        { privateSheetId: PRIVATE_ID },
+        {
+          tasks: [
+            { id: "t-1", title: "Edited", category: "Production", weekId: "2026-08-03", dayOfWeek: 3, updatedAt: 2000 },
+          ],
+          bills: [],
+          dailyEvents: {},
+          categories: [],
+        }
+      );
+
+      expect(sheets.getSheetByName("Task List")!.rows()[1][1]).toBe("Edited");
+      expect(sheets.getSheetByName("Tasks")).toBeNull();
+    });
+  });
+
+  describe("patchStaffTodos", () => {
+    const STAFF_ID = "staff-sheet";
+    const TODO_HEADERS = [
+      "id", "title", "category", "completed", "createdBy", "createdAt", "updatedBy",
+      "updatedAt", "dueDate", "token", "assignee", "proof", "originTaskId", "priority", "shiftHours",
+    ];
+
+    function todoRow(id: string, title: string, assignee = "Sam"): string[] {
+      return [id, title, "Bar", "FALSE", "Sam", "", "", "", "2026-08-05", "", assignee, "", "", "normal", ""];
+    }
+
+    let staffSheets: FakeSpreadsheet;
+
+    function patch(tasks: unknown[]) {
+      return script.KWTM_patchStaffTodos_({ staffTodosSheetId: STAFF_ID }, tasks);
+    }
+
+    beforeEach(() => {
+      staffSheets = new FakeSpreadsheet(STAFF_ID);
+      const env = createEnvironment({
+        spreadsheets: { [PRIVATE_ID]: sheets, [STAFF_ID]: staffSheets },
+        properties: { KWTM_SYNC_TOKEN: "test-token" },
+        active: sheets,
+      });
+      script = loadCodeGs(env.globals);
+    });
+
+    it("updates a staff-owned row in place without creating one", () => {
+      staffSheets.add(FakeSheet.from("Todos", [TODO_HEADERS, todoRow("abc", "Old title")]));
+
+      const result = patch([{ id: "staff-abc", source: "staff", title: "New title", category: "Bar", assignee: "Sam" }]);
+
+      const rows = staffSheets.getSheetByName("Todos")!.rows();
+      expect(rows).toHaveLength(2);
+      expect(rows[1][1]).toBe("New title");
+      expect(result.updated).toBe(1);
+      expect(result.inserted).toBe(0);
+    });
+
+    it("never creates a staff-owned row that is not already in the sheet", () => {
+      staffSheets.add(FakeSheet.from("Todos", [TODO_HEADERS]));
+
+      const result = patch([{ id: "staff-missing", source: "staff", title: "Ghost", assignee: "Sam" }]);
+
+      expect(staffSheets.getSheetByName("Todos")!.rows()).toHaveLength(1);
+      expect(result.inserted).toBe(0);
+    });
+
+    it("mirrors an assigned private task and closes it once it is no longer assignable", () => {
+      staffSheets.add(FakeSheet.from("Todos", [TODO_HEADERS]));
+
+      patch([{ id: "t-9", title: "Restock", category: "Bar", assignee: "Sam", priority: "high" }]);
+
+      let rows = staffSheets.getSheetByName("Todos")!.rows();
+      expect(rows[1][0]).toBe("kwtm-t-9");
+      expect(rows[1][1]).toBe("Restock");
+      expect(rows[1][3]).toBe("FALSE");
+
+      // Completing it should close the mirror rather than leave it open for staff.
+      patch([{ id: "t-9", title: "Restock", category: "Bar", assignee: "Sam", completed: true }]);
+
+      rows = staffSheets.getSheetByName("Todos")!.rows();
+      expect(rows).toHaveLength(2);
+      expect(rows[1][3]).toBe("TRUE");
+    });
+
+    it("closes a mirror that has dropped out of the payload entirely", () => {
+      staffSheets.add(
+        FakeSheet.from("Todos", [TODO_HEADERS, todoRow("kwtm-t-1", "Orphaned mirror"), todoRow("real", "Staff row")])
+      );
+
+      const result = patch([]);
+
+      const rows = staffSheets.getSheetByName("Todos")!.rows();
+      expect(rows[1][3]).toBe("TRUE");
+      // A row the staff app owns must not be closed just because we did not mention it.
+      expect(rows[2][3]).toBe("FALSE");
+      expect(result.closed).toBe(1);
+    });
+
+    it("writes many rows without one call per row", () => {
+      const seeded = Array.from({ length: 25 }, (_, index) => todoRow(`kwtm-t-${index}`, `Task ${index}`));
+      staffSheets.add(FakeSheet.from("Todos", [TODO_HEADERS, ...seeded]));
+
+      const tasks = Array.from({ length: 25 }, (_, index) => ({
+        id: `t-${index}`,
+        title: `Renamed ${index}`,
+        category: "Bar",
+        assignee: "Sam",
+      }));
+      const result = patch(tasks);
+
+      const rows = staffSheets.getSheetByName("Todos")!.rows();
+      expect(rows).toHaveLength(26);
+      expect(rows[1][1]).toBe("Renamed 0");
+      expect(rows[25][1]).toBe("Renamed 24");
+      expect(result.updated).toBe(25);
+    });
+  });
+
+  describe("pushAll", () => {
+    it("does every push in one request, and refuses a bad token first", () => {
+      seedTasks([taskRow("t-1", "Before", 1000)]);
+
+      const denied = JSON.parse(
+        script.KWTM_handleRequest_({ action: "pushAll", token: "wrong", config: {} }).getContent()
+      );
+      expect(denied.ok).toBe(false);
+      expect(sheets.getSheetByName("Tasks")!.rows()[1][1]).toBe("Before");
+
+      const response = JSON.parse(
+        script.KWTM_handleRequest_({
+          action: "pushAll",
+          token: "test-token",
+          config: { privateSheetId: PRIVATE_ID },
+          snapshot: {
+            tasks: [
+              { id: "t-1", title: "After", category: "Production", weekId: "2026-08-03", dayOfWeek: 3, updatedAt: 2000 },
+            ],
+            bills: [],
+            dailyEvents: {},
+            categories: [],
+          },
+          tasks: [],
+          scheduledTasks: [],
+          staff: [],
+          weekId: "2026-08-03",
+        }).getContent()
+      );
+
+      expect(response.ok).toBe(true);
+      expect(response.result.operations.skipped).toBe(false);
+      expect(sheets.getSheetByName("Tasks")!.rows()[1][1]).toBe("After");
+    });
+
+    it("still commits the private write when a staff mirror is unreachable", () => {
+      // The staff workbook id points at a spreadsheet the fake environment does not have,
+      // which is what an unshared or renamed workbook looks like from here.
+      seedTasks([taskRow("t-1", "Before", 1000)]);
+
+      const response = JSON.parse(
+        script.KWTM_handleRequest_({
+          action: "pushAll",
+          token: "test-token",
+          config: { privateSheetId: PRIVATE_ID, staffTodosSheetId: "missing-workbook" },
+          snapshot: {
+            tasks: [
+              { id: "t-1", title: "After", category: "Production", weekId: "2026-08-03", dayOfWeek: 3, updatedAt: 2000 },
+            ],
+            bills: [],
+            dailyEvents: {},
+            categories: [],
+          },
+          tasks: [{ id: "t-2", title: "Mirror me", assignee: "Sam" }],
+          scheduledTasks: [],
+          staff: [],
+          weekId: "2026-08-03",
+        }).getContent()
+      );
+
+      // ok, so the client does not retry the save forever over a mirror it cannot fix...
+      expect(response.ok).toBe(true);
+      expect(sheets.getSheetByName("Tasks")!.rows()[1][1]).toBe("After");
+      // ...but the failure is still reported rather than swallowed.
+      expect(response.warnings.join(" ")).toMatch(/staffTodos/);
+    });
+
+    it("answers retryable when another execution holds the lock", () => {
+      const busy = createEnvironment({
+        spreadsheets: { [PRIVATE_ID]: sheets },
+        properties: { KWTM_SYNC_TOKEN: "test-token" },
+        active: sheets,
+        lockAvailable: false,
+      });
+      const busyScript = loadCodeGs(busy.globals);
+
+      const response = JSON.parse(
+        busyScript.KWTM_handleRequest_({ action: "pushAll", token: "test-token", config: {} }).getContent()
+      );
+
+      expect(response.ok).toBe(false);
+      expect(response.retryable).toBe(true);
     });
   });
 

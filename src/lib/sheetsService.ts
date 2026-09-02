@@ -37,7 +37,47 @@ function cellAt(row: readonly string[], index: number): string {
 export const DEFAULT_PRIVATE_SHEET_ID = "1NQKvTSWvpTZ3uRsYWMUPAdOa_bHvsp_VMpc7EX1c_tI";
 export const DEFAULT_STAFF_TODOS_SHEET_ID = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 export const APPS_SCRIPT_SYNC_FUNCTION = "/.netlify/functions/sheets-sync";
-const SYNC_REQUEST_TIMEOUT_MS = 50_000;
+
+// One attempt, not the whole retry budget. The Netlify function gives up on Apps Script at
+// 8.5s and Netlify itself kills the invocation at 10s, so a longer wait here only delays
+// the retry -- and, while it waits, leaves the app's sync-in-flight flag set.
+const SYNC_REQUEST_TIMEOUT_MS = 15_000;
+
+// Apps Script sheds load by serving an HTML page instead of running the script, and two
+// clients (a browser tab and the installed app) racing the same script lock is enough to
+// trigger it. These are transient by nature: a short backoff clears them without the user
+// ever seeing a failure. Bounded so a genuine outage still surfaces.
+const SYNC_RETRY_DELAYS_MS = [1_200, 3_500];
+
+type SyncErrorBody = {
+  ok?: boolean;
+  error?: string;
+  message?: string;
+  retryable?: boolean;
+  upstreamStatus?: number;
+  upstreamSnippet?: string;
+};
+
+/** Carries the function's `retryable` flag and upstream detail through to the retry loop. */
+export class SheetSyncError extends Error {
+  readonly retryable: boolean;
+  readonly upstreamStatus?: number;
+  readonly upstreamSnippet?: string;
+
+  constructor(message: string, options: { retryable?: boolean; upstreamStatus?: number; upstreamSnippet?: string } = {}) {
+    super(message);
+    this.name = "SheetSyncError";
+    this.retryable = Boolean(options.retryable);
+    this.upstreamStatus = options.upstreamStatus;
+    this.upstreamSnippet = options.upstreamSnippet;
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
 
 export type AppsScriptSyncConfig = {
   privateSheetId: string;
@@ -383,6 +423,33 @@ function isLocalHostname(): boolean {
 }
 
 async function syncFunctionFetch<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= SYNC_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await syncFunctionFetchOnce<T>(action, payload);
+    } catch (error) {
+      lastError = error;
+      const retryable = error instanceof SheetSyncError ? error.retryable : isLikelyTransientNetworkError(error);
+      if (!retryable || attempt === SYNC_RETRY_DELAYS_MS.length) break;
+      await delay(SYNC_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * A dropped request looks the same whether the network blipped or the server refused, so
+ * treat a bare `TypeError: Failed to fetch` -- what every browser throws for a connection
+ * that never completed -- as worth one more try. Anything with a real response behind it
+ * has already been classified by the sync function.
+ */
+function isLikelyTransientNetworkError(error: unknown): boolean {
+  return error instanceof TypeError;
+}
+
+async function syncFunctionFetchOnce<T>(action: string, payload: Record<string, unknown>): Promise<T> {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS);
   let response: Response;
@@ -399,25 +466,41 @@ async function syncFunctionFetch<T>(action: string, payload: Record<string, unkn
     text = await response.text();
   } catch (error) {
     if (isAbortError(error)) {
-      throw new Error(`Sheet sync timed out after ${Math.round(SYNC_REQUEST_TIMEOUT_MS / 1000)} seconds.`);
+      throw new SheetSyncError(`Sheet sync timed out after ${Math.round(SYNC_REQUEST_TIMEOUT_MS / 1000)} seconds.`, {
+        retryable: true,
+      });
     }
     throw error;
   } finally {
     window.clearTimeout(timeoutId);
   }
 
-  let data: { ok?: boolean; error?: string; message?: string };
+  let data: SyncErrorBody;
   try {
     data = JSON.parse(text);
   } catch {
     if (isLocalHostname()) {
-      throw new Error("Sheet sync is not available from this local Vite server. Use the deployed Netlify site or run with Netlify Dev.");
+      throw new SheetSyncError(
+        "Sheet sync is not available from this local Vite server. Use the deployed Netlify site or run with Netlify Dev."
+      );
     }
-    throw new Error(`Sheet sync endpoint returned ${response.status || "a non-JSON response"}. Refresh the page and sign in again if prompted.`);
+    // 502/504 here is Netlify's own page after it tore the function down -- retry.
+    throw new SheetSyncError(
+      `Sheet sync endpoint returned ${response.status || "a non-JSON response"}. Refresh the page and sign in again if prompted.`,
+      { retryable: response.status >= 500 }
+    );
   }
 
   if (!response.ok || data.ok === false) {
-    throw new Error(data.error || data.message || response.statusText || "Sheet sync failed.");
+    const detail = data.upstreamSnippet ? ` (upstream said: ${data.upstreamSnippet})` : "";
+    throw new SheetSyncError(
+      `${data.error || data.message || response.statusText || "Sheet sync failed."}${detail}`,
+      {
+        retryable: Boolean(data.retryable),
+        upstreamStatus: data.upstreamStatus,
+        upstreamSnippet: data.upstreamSnippet,
+      }
+    );
   }
 
   return data as T;
@@ -497,19 +580,42 @@ export async function pullAppsScriptSnapshot(
   };
 }
 
-export async function pushAppsScriptOperations(config: AppsScriptSyncConfig, snapshot: OperationsSnapshot): Promise<void> {
-  await syncFunctionFetch("pushOperations", { config, snapshot });
-}
+export type AppsScriptPushAllPayload = {
+  snapshot: OperationsSnapshot;
+  staffTodos: Task[];
+  weekId: string;
+  scheduledTasks: Task[];
+  staff: StaffMember[];
+};
 
-export async function pushAppsScriptStaffTodos(config: AppsScriptSyncConfig, tasks: Task[]): Promise<void> {
-  await syncFunctionFetch("pushStaffTodos", { config, tasks });
-}
+export type AppsScriptPushAllResult = {
+  ok?: boolean;
+  warnings?: string[];
+};
 
-export async function pushAppsScriptStaffSchedule(
+/**
+ * One request for the whole save.
+ *
+ * This used to be three sequential calls -- operations, staff todos, staff schedule -- each
+ * its own Apps Script execution taking the same script lock. With a browser tab and the
+ * installed app both open that is six executions competing for one lock per save, which is
+ * what made Apps Script start answering with HTML error pages instead of running.
+ */
+export async function pushAppsScriptAll(
   config: AppsScriptSyncConfig,
-  weekId: string,
-  tasks: Task[],
-  staff: StaffMember[]
-): Promise<void> {
-  await syncFunctionFetch("pushStaffSchedule", { config, weekId, tasks, staff });
+  payload: AppsScriptPushAllPayload
+): Promise<AppsScriptPushAllResult> {
+  return await syncFunctionFetch<AppsScriptPushAllResult>("pushAll", {
+    config,
+    snapshot: payload.snapshot,
+    tasks: payload.staffTodos,
+    weekId: payload.weekId,
+    scheduledTasks: payload.scheduledTasks,
+    staff: payload.staff,
+  });
 }
+
+// The single-purpose pushOperations / pushStaffTodos / pushStaffSchedule callers were
+// removed when pushAll replaced them. Code.gs and the Netlify function still accept those
+// three actions, so a browser holding a cached older bundle keeps syncing across a deploy;
+// nothing in the current client sends them.

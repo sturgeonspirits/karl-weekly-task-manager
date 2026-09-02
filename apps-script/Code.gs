@@ -1,5 +1,5 @@
-// KWTM_SCRIPT_VERSION: 2026-08-21.1
-// KWTM_SCRIPT_UPDATED_AT: 2026-08-21
+// KWTM_SCRIPT_VERSION: 2026-09-02.2
+// KWTM_SCRIPT_UPDATED_AT: 2026-09-02
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
 /*
@@ -19,16 +19,45 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-08-21.1
- * - KWTM_SCRIPT_UPDATED_AT 2026-08-21
+ * - KWTM_SCRIPT_VERSION 2026-09-02.2
+ * - KWTM_SCRIPT_UPDATED_AT 2026-09-02
  * - Open the deployed web app URL in a browser to confirm the live script version.
+ *
+ * Invariant: no code path may throw out of doPost. Apps Script answers an uncaught error
+ * with an HTML error page rather than JSON, and the Netlify function on the other end can
+ * then only report "Apps Script did not return JSON." -- the same opaque line for a
+ * transient hiccup and for a real, fixable fault. Every entry point ends in KWTM_json_.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-08-21.1";
-var KWTM_SCRIPT_UPDATED_AT = "2026-08-21";
+var KWTM_SCRIPT_VERSION = "2026-09-02.2";
+var KWTM_SCRIPT_UPDATED_AT = "2026-09-02";
+
+// How long to wait for the script lock before telling the caller to come back. Kept short
+// on purpose -- see KWTM_tryLock_ for why a long wait actively makes things worse.
+var KWTM_LOCK_WAIT_MS = 8000;
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 var KWTM_SOFT_DELETE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 var KWTM_BACKUP_RETENTION_DAYS = 8;
+
+// The Todos tab in the staff scheduler workbook is owned by the staff app, not by this
+// script, so its layout is fixed rather than derived from a KWTM_* header list.
+var KWTM_STAFF_TODO_HEADERS = [
+  "id",
+  "title",
+  "category",
+  "completed",
+  "createdBy",
+  "createdAt",
+  "updatedBy",
+  "updatedAt",
+  "dueDate",
+  "token",
+  "assignee",
+  "proof",
+  "originTaskId",
+  "priority",
+  "shiftHours",
+];
 
 // NOTE: the KWTM_*_HEADERS arrays below mirror src/lib/sheetSchema.ts, and
 // KWTM_isPrivateTask_ / KWTM_hasPrivateOperationsData_ mirror src/lib/taskPredicates.ts.
@@ -87,15 +116,54 @@ var KWTM_STAFF_SCHEDULE_HEADERS = [
 ];
 
 function doPost(e) {
-  var body = KWTM_parseBody_(e);
-  if (body.app === "karl-weekly-task-manager") return KWTM_handleRequest_(body);
-  return KWTM_json_({ ok: false, error: "Unknown app." });
+  // Nothing here may throw. An uncaught error makes Apps Script return an HTML error page
+  // instead of JSON, which the Netlify function can only report as
+  // "Apps Script did not return JSON." -- an unhelpful message for a real, fixable fault.
+  try {
+    var body = KWTM_parseBody_(e);
+    if (body.app === "karl-weekly-task-manager") return KWTM_handleRequest_(body);
+    return KWTM_json_({ ok: false, error: "Unknown app." });
+  } catch (error) {
+    return KWTM_json_({ ok: false, error: KWTM_errorMessage_(error), stage: "doPost" });
+  }
 }
 
 function doGet() {
   return KWTM_json_({
     ok: true,
     message: "Karl Weekly Task Manager sync bridge is deployed.",
+  });
+}
+
+function KWTM_errorMessage_(error) {
+  if (!error) return "Unknown Apps Script error.";
+  return error.message ? String(error.message) : String(error);
+}
+
+/**
+ * Takes the script lock, or returns null when another execution already holds it.
+ *
+ * This used to wait 30 seconds. The caller is a Netlify function whose own budget is far
+ * shorter than that, so the wait could never pay off: the request was already dead by the
+ * time the lock arrived, and the waiting execution sat on one of the few concurrent Apps
+ * Script slots the whole time, making the next request likelier to be shed as HTML. A
+ * short wait plus a retryable answer lets the client come back a moment later instead.
+ */
+function KWTM_tryLock_() {
+  var lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(KWTM_LOCK_WAIT_MS)) return null;
+  } catch (error) {
+    return null;
+  }
+  return lock;
+}
+
+function KWTM_busyResponse_() {
+  return KWTM_json_({
+    ok: false,
+    retryable: true,
+    error: "Another sync is already writing to the sheet. Retry in a moment.",
   });
 }
 
@@ -112,32 +180,91 @@ function KWTM_handleRequest_(body) {
       });
     }
 
+    // One request, one lock, one execution slot. The client used to send pushOperations,
+    // pushStaffTodos and pushStaffSchedule as three separate round trips per save; with two
+    // clients open that is six executions contending for one script lock, which is what
+    // made Apps Script start shedding requests as HTML. The three actions below are kept so
+    // a browser still running the old bundle keeps working during a rollout.
+    if (body.action === "pushAll") {
+      lock = KWTM_tryLock_();
+      if (!lock) return KWTM_busyResponse_();
+      return KWTM_pushAll_(body);
+    }
+
     if (body.action === "pushOperations") {
-      lock = LockService.getScriptLock();
-      lock.waitLock(30000);
+      lock = KWTM_tryLock_();
+      if (!lock) return KWTM_busyResponse_();
       KWTM_writeOperations_(body.config || {}, body.snapshot || {});
       return KWTM_json_({ ok: true });
     }
 
     if (body.action === "pushStaffTodos") {
-      lock = LockService.getScriptLock();
-      lock.waitLock(30000);
+      lock = KWTM_tryLock_();
+      if (!lock) return KWTM_busyResponse_();
       var todoResult = KWTM_patchStaffTodos_(body.config || {}, body.tasks || []);
       return KWTM_json_({ ok: true, result: todoResult });
     }
 
     if (body.action === "pushStaffSchedule") {
-      lock = LockService.getScriptLock();
-      lock.waitLock(30000);
+      lock = KWTM_tryLock_();
+      if (!lock) return KWTM_busyResponse_();
       var result = KWTM_writeStaffSchedule_(body.config || {}, body.weekId, body.tasks || [], body.staff || []);
       return KWTM_json_({ ok: true, result: result });
     }
 
     return KWTM_json_({ ok: false, error: "Unknown sync action." });
   } catch (error) {
-    return KWTM_json_({ ok: false, error: error && error.message ? error.message : String(error) });
+    return KWTM_json_({ ok: false, error: KWTM_errorMessage_(error), action: String(body.action || "") });
   } finally {
-    if (lock) lock.releaseLock();
+    if (lock) {
+      try {
+        lock.releaseLock();
+      } catch (releaseError) {
+        // A lock that already expired throws on release. Swallowing it here matters: an
+        // error thrown from `finally` replaces the JSON response with an HTML error page.
+      }
+    }
+  }
+}
+
+/**
+ * Writes the private workbook, then the two staff mirrors, under a single lock.
+ *
+ * Only the private workbook is the source of truth, so only its failure fails the request.
+ * A mirror that cannot be written -- the staff workbook renamed, unshared, or briefly
+ * unavailable -- is reported as a warning instead. Failing the whole request for it would
+ * be worse than useless: the private write has already committed by then, and the client
+ * would retry the save forever, rewriting the same rows on every pass while the mirror went
+ * on failing for its own unrelated reason.
+ */
+function KWTM_pushAll_(body) {
+  var config = body.config || {};
+  var snapshot = body.snapshot || {};
+  var result = { operations: { skipped: true, reason: "No private operations data in snapshot." } };
+  var warnings = [];
+
+  if (KWTM_hasPrivateOperationsData_(snapshot)) {
+    KWTM_writeOperations_(config, snapshot);
+    result.operations = { skipped: false };
+  }
+
+  result.staffTodos = KWTM_mirror_(warnings, "staffTodos", function () {
+    return KWTM_patchStaffTodos_(config, body.tasks || []);
+  });
+  result.staffSchedule = KWTM_mirror_(warnings, "staffSchedule", function () {
+    return KWTM_writeStaffSchedule_(config, body.weekId, body.scheduledTasks || [], body.staff || []);
+  });
+
+  return KWTM_json_({ ok: true, result: result, warnings: warnings });
+}
+
+function KWTM_mirror_(warnings, name, run) {
+  try {
+    return run();
+  } catch (error) {
+    var message = KWTM_errorMessage_(error);
+    warnings.push(name + ": " + message);
+    return { failed: true, error: message };
   }
 }
 
@@ -168,22 +295,40 @@ function KWTM_publicStaffSheetId_(config) {
   return String(config.publicStaffSheetId || KWTM_property_("KWTM_PUBLIC_STAFF_SHEET_ID") || "").trim();
 }
 
+/**
+ * Resolves the four tabs this script owns, once, for both reading and writing.
+ *
+ * Reads used to pick a tab by preference list while writes hardcoded the canonical name, so
+ * a workbook whose tab is called "Task List" was read from there and written to a brand new
+ * "Tasks" tab -- the app and the sheet silently diverging. Same resolution on both sides
+ * removes that split. The `|| "Tasks"` fallbacks only apply to a workbook that has no such
+ * tab at all, where creating the canonical name is the right move.
+ */
+function KWTM_privateTabNames_(ss) {
+  var tabs = KWTM_sheetTitles_(ss);
+  return {
+    tasks: KWTM_pickTab_(tabs, ["Tasks", "Task List", "Todos", "Todo"]) || "Tasks",
+    dailyEvents: KWTM_pickTab_(tabs, ["Events", "Daily Notes", "Notes", "Daily Agenda"]) || "Events",
+    categories: KWTM_pickTab_(tabs, ["Categories"]) || "Categories",
+    bills: KWTM_pickTab_(tabs, ["Bills", "Expenses"]) || "Bills",
+    staff: KWTM_pickTab_(tabs, ["Staff", "Staff Members"]) || "Staff",
+  };
+}
+
 function KWTM_readPrivateWorkbook_(config) {
   var ss = SpreadsheetApp.openById(KWTM_privateSheetId_(config));
   var tabs = KWTM_sheetTitles_(ss);
   var taskTab = KWTM_pickTab_(tabs, ["Tasks", "Task List", "Todos", "Todo"]);
-  var dailyTab = KWTM_pickTab_(tabs, ["Events", "Daily Notes", "Notes", "Daily Agenda"]);
-  var categoryTab = KWTM_pickTab_(tabs, ["Categories"]);
-  var billTab = KWTM_pickTab_(tabs, ["Bills", "Expenses"]);
-  var staffTab = KWTM_pickTab_(tabs, ["Staff", "Staff Members"]);
 
   return {
+    // Empty rather than the fallback: the client switches parsers on this name, so an
+    // absent tab must read as absent, not as an empty "Tasks".
     taskTab: taskTab || "",
     tasks: KWTM_readRows_(ss, taskTab),
-    dailyEvents: KWTM_readRows_(ss, dailyTab),
-    categories: KWTM_readRows_(ss, categoryTab),
-    bills: KWTM_readRows_(ss, billTab),
-    staff: KWTM_readRows_(ss, staffTab),
+    dailyEvents: KWTM_readRows_(ss, KWTM_pickTab_(tabs, ["Events", "Daily Notes", "Notes", "Daily Agenda"])),
+    categories: KWTM_readRows_(ss, KWTM_pickTab_(tabs, ["Categories"])),
+    bills: KWTM_readRows_(ss, KWTM_pickTab_(tabs, ["Bills", "Expenses"])),
+    staff: KWTM_readRows_(ss, KWTM_pickTab_(tabs, ["Staff", "Staff Members"])),
   };
 }
 
@@ -258,13 +403,14 @@ function KWTM_writeOperations_(config, snapshot) {
   }
 
   var ss = SpreadsheetApp.openById(KWTM_privateSheetId_(config));
+  var tabNames = KWTM_privateTabNames_(ss);
   var tasks = (snapshot.tasks || []).filter(function (task) {
     return task.source !== "staff";
   });
 
   KWTM_upsertRows_(
     ss,
-    "Tasks",
+    tabNames.tasks,
     [KWTM_TASK_HEADERS].concat(
       tasks.map(function (task) {
         return [
@@ -296,7 +442,7 @@ function KWTM_writeOperations_(config, snapshot) {
   var now = new Date().getTime();
   KWTM_upsertRows_(
     ss,
-    "Events",
+    tabNames.dailyEvents,
     [KWTM_DAILY_HEADERS].concat(
       Object.keys(dailyEvents)
         .sort()
@@ -313,7 +459,7 @@ function KWTM_writeOperations_(config, snapshot) {
 
   KWTM_upsertRows_(
     ss,
-    "Categories",
+    tabNames.categories,
     [KWTM_CATEGORY_HEADERS].concat(
       (snapshot.categories || []).map(function (category) {
         return [category.id || "", category.name || "", category.color || ""];
@@ -324,7 +470,7 @@ function KWTM_writeOperations_(config, snapshot) {
 
   KWTM_upsertRows_(
     ss,
-    "Bills",
+    tabNames.bills,
     [KWTM_BILL_HEADERS].concat(
       (snapshot.bills || []).map(function (bill) {
         return [
@@ -386,6 +532,16 @@ function KWTM_writeStaffSchedule_(config, weekId, tasks, staff) {
   return { skipped: false, rows: rows.length - 1 };
 }
 
+/**
+ * Mirrors this app's tasks into the staff scheduler's Todos tab, using one read and one
+ * write.
+ *
+ * The previous version wrote each field of each row with its own setValue -- nine calls per
+ * updated todo -- and appendRow per insert. Twenty mirrored todos meant close to two
+ * hundred round trips to Sheets while holding the script lock, comfortably long enough to
+ * outlive the caller's timeout. The layout here is the staff app's, not ours, so extra
+ * columns are read and written back untouched.
+ */
 function KWTM_patchStaffTodos_(config, tasks) {
   var spreadsheetId = KWTM_staffTodosSheetId_(config);
   if (!spreadsheetId) return { skipped: true, reason: "No staff scheduler sheet ID." };
@@ -396,21 +552,27 @@ function KWTM_patchStaffTodos_(config, tasks) {
 
   var sheet = ss.getSheetByName(tabName);
   if (!sheet) return { skipped: true, reason: "No Todos sheet found." };
-  if (sheet.getLastRow() < 1) {
-    sheet.getRange(1, 1, 1, 15).setValues([
-      ["id", "title", "category", "completed", "createdBy", "createdAt", "updatedBy", "updatedAt", "dueDate", "token", "assignee", "proof", "originTaskId", "priority", "shiftHours"],
-    ]);
+
+  var width = Math.max(KWTM_STAFF_TODO_HEADERS.length, sheet.getLastColumn());
+  var lastRow = sheet.getLastRow();
+  KWTM_ensureSheetSize_(sheet, Math.max(lastRow, 1), width);
+
+  if (lastRow < 1) {
+    sheet.getRange(1, 1, 1, KWTM_STAFF_TODO_HEADERS.length).setValues([KWTM_STAFF_TODO_HEADERS]);
+    lastRow = 1;
   }
 
-  var lastRow = sheet.getLastRow();
-  var idValues = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, 1).getDisplayValues() : [];
-  var rowById = {};
-  var existingMirrorRows = {};
-  idValues.forEach(function (row, index) {
+  var block = (lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, width).getValues() : []).map(function (row) {
+    return KWTM_padRow_(row, width);
+  });
+
+  var indexById = {};
+  var existingMirrorIds = {};
+  block.forEach(function (row, index) {
     var id = String(row[0] || "").trim();
-    if (!id) return;
-    rowById[id] = index + 2;
-    if (KWTM_isKwtmStaffMirrorId_(id)) existingMirrorRows[id] = index + 2;
+    if (!id || id in indexById) return;
+    indexById[id] = index;
+    if (KWTM_isKwtmStaffMirrorId_(id)) existingMirrorIds[id] = index;
   });
 
   var updated = 0;
@@ -421,18 +583,19 @@ function KWTM_patchStaffTodos_(config, tasks) {
   (tasks || []).forEach(function (task) {
     var isStaffTask = task.source === "staff" || String(task.id || "").match(/^staff-/);
     var rawId = isStaffTask ? String(task.id || "").replace(/^staff-/, "") : "kwtm-" + String(task.id || "");
-    var rowNumber = rowById[rawId];
+    var index = indexById[rawId];
 
     if (isStaffTask) {
-      if (!rowNumber) return;
-      KWTM_updateStaffTodoRow_(sheet, rowNumber, task);
+      // Staff-owned rows are never created here, only updated in place.
+      if (index === undefined) return;
+      KWTM_applyStaffTodoUpdate_(block[index], task);
       updated += 1;
       return;
     }
 
     if (!KWTM_shouldMirrorPrivateTaskToStaff_(task)) {
-      if (rowNumber) {
-        KWTM_closeStaffTodoMirror_(sheet, rowNumber);
+      if (index !== undefined) {
+        KWTM_applyStaffTodoClose_(block[index]);
         closed += 1;
         activeMirrorIds[rawId] = true;
       }
@@ -440,22 +603,29 @@ function KWTM_patchStaffTodos_(config, tasks) {
     }
 
     activeMirrorIds[rawId] = true;
-    var mirrorRow = KWTM_staffTodoMirrorRow_(rawId, task);
-    if (rowNumber) {
-      sheet.getRange(rowNumber, 1, 1, mirrorRow.length).setValues([mirrorRow]);
+    var mirrorRow = KWTM_padRow_(KWTM_staffTodoMirrorRow_(rawId, task), width);
+    if (index !== undefined) {
+      for (var column = 0; column < KWTM_STAFF_TODO_HEADERS.length; column += 1) {
+        block[index][column] = mirrorRow[column];
+      }
       updated += 1;
       return;
     }
 
-    sheet.appendRow(mirrorRow);
+    indexById[rawId] = block.push(mirrorRow) - 1;
     inserted += 1;
   });
 
-  Object.keys(existingMirrorRows).forEach(function (id) {
+  Object.keys(existingMirrorIds).forEach(function (id) {
     if (activeMirrorIds[id]) return;
-    KWTM_closeStaffTodoMirror_(sheet, existingMirrorRows[id]);
+    KWTM_applyStaffTodoClose_(block[existingMirrorIds[id]]);
     closed += 1;
   });
+
+  if (block.length) {
+    KWTM_ensureSheetSize_(sheet, block.length + 1, width);
+    sheet.getRange(2, 1, block.length, width).setValues(block);
+  }
 
   return { skipped: false, updated: updated, inserted: inserted, closed: closed };
 }
@@ -470,16 +640,17 @@ function KWTM_shouldMirrorPrivateTaskToStaff_(task) {
   );
 }
 
-function KWTM_updateStaffTodoRow_(sheet, rowNumber, task) {
-  sheet.getRange(rowNumber, 2).setValue(task.title || "");
-  sheet.getRange(rowNumber, 3).setValue(task.category || "");
-  sheet.getRange(rowNumber, 4).setValue(task.completed ? "TRUE" : "FALSE");
-  sheet.getRange(rowNumber, 8).setValue(new Date().toISOString());
-  sheet.getRange(rowNumber, 9).setValue(task.specificDate || "");
-  sheet.getRange(rowNumber, 11).setValue(task.assignee || "");
-  sheet.getRange(rowNumber, 13).setValue(task.originTaskId || "");
-  sheet.getRange(rowNumber, 14).setValue(KWTM_staffTodoPriorityForSheet_(task.priority));
-  sheet.getRange(rowNumber, 15).setValue(task.shiftHours || "");
+/** Mutates a Todos row in place. Column numbers are the staff app's, hence the offsets. */
+function KWTM_applyStaffTodoUpdate_(row, task) {
+  row[1] = task.title || "";
+  row[2] = task.category || "";
+  row[3] = task.completed ? "TRUE" : "FALSE";
+  row[7] = new Date().toISOString();
+  row[8] = task.specificDate || "";
+  row[10] = task.assignee || "";
+  row[12] = task.originTaskId || "";
+  row[13] = KWTM_staffTodoPriorityForSheet_(task.priority);
+  row[14] = task.shiftHours || "";
 }
 
 function KWTM_staffTodoMirrorRow_(rawId, task) {
@@ -503,9 +674,9 @@ function KWTM_staffTodoMirrorRow_(rawId, task) {
   ];
 }
 
-function KWTM_closeStaffTodoMirror_(sheet, rowNumber) {
-  sheet.getRange(rowNumber, 4).setValue("TRUE");
-  sheet.getRange(rowNumber, 8).setValue(new Date().toISOString());
+function KWTM_applyStaffTodoClose_(row) {
+  row[3] = "TRUE";
+  row[7] = new Date().toISOString();
 }
 
 function KWTM_patchStaffDailyNotes_(config, dailyEvents) {
@@ -531,56 +702,88 @@ function KWTM_patchStaffDailyNotes_(config, dailyEvents) {
   return { skipped: false, rows: rows.length - 1 };
 }
 
+/**
+ * Merges `rows` (header first) into `tabName`, keyed on `keyColumnIndex`, using one read
+ * and one write.
+ *
+ * This used to issue a setValues call per changed row, plus a deleteRow per expired
+ * tombstone. A busy week meant dozens of round trips to Sheets, each a few hundred
+ * milliseconds, all of them inside the script lock -- which is what pushed executions past
+ * the caller's timeout and left concurrent syncs to be shed by Apps Script as HTML error
+ * pages. Assembling the block in memory and writing it once costs two calls regardless of
+ * how much changed.
+ */
 function KWTM_upsertRows_(ss, tabName, rows, keyColumnIndex, updatedAtColumnIndex, deletedColumnIndex) {
   var normalized = KWTM_normalizeRows_(rows);
   if (!normalized.length) return;
 
   var sheet = ss.getSheetByName(tabName) || ss.insertSheet(tabName);
-  var width = normalized[0].length;
-  KWTM_backupTab_(ss, tabName, sheet);
-  KWTM_ensureSheetSize_(sheet, 1, width);
-  sheet.getRange(1, 1, 1, width).setValues([normalized[0]]);
-
+  var header = normalized[0];
+  var width = header.length;
   var lastRow = sheet.getLastRow();
+  // Columns past the ones we manage belong to whoever added them; read and write them back
+  // untouched rather than truncating the sheet to our own schema.
   var readWidth = Math.max(width, sheet.getLastColumn());
-  var existingRows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, readWidth).getValues() : [];
-  var rowByKey = {};
-  var pruneRowNumbers = {};
-  existingRows.forEach(function (row, index) {
-    var key = String(row[keyColumnIndex] || "").trim();
-    var rowNumber = index + 2;
-    if (key) rowByKey[key] = { rowNumber: rowNumber, values: row };
-    if (KWTM_shouldPruneDeletedRow_(row, deletedColumnIndex, updatedAtColumnIndex)) pruneRowNumbers[rowNumber] = true;
+
+  KWTM_ensureSheetSize_(sheet, Math.max(lastRow, 1), readWidth);
+  var block = (lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, readWidth).getValues() : []).map(function (row) {
+    return KWTM_padRow_(row, readWidth);
   });
 
-  var rowsToAppend = [];
+  var indexByKey = {};
+  block.forEach(function (row, index) {
+    var key = String(row[keyColumnIndex] || "").trim();
+    if (key && !(key in indexByKey)) indexByKey[key] = index;
+  });
+
   normalized.slice(1).forEach(function (row) {
     var key = String(row[keyColumnIndex] || "").trim();
     if (!key) return;
 
-    var existing = rowByKey[key];
-    if (existing) {
-      if (KWTM_shouldSkipStaleRow_(row, existing.values, updatedAtColumnIndex)) return;
-      KWTM_ensureSheetSize_(sheet, existing.rowNumber, width);
-      sheet.getRange(existing.rowNumber, 1, 1, width).setValues([row]);
-      if (KWTM_shouldPruneDeletedRow_(row, deletedColumnIndex, updatedAtColumnIndex)) {
-        pruneRowNumbers[existing.rowNumber] = true;
-      } else {
-        delete pruneRowNumbers[existing.rowNumber];
-      }
+    var index = indexByKey[key];
+    if (index === undefined) {
+      indexByKey[key] = block.push(KWTM_padRow_(row, readWidth)) - 1;
       return;
     }
 
-    rowsToAppend.push(row);
+    var existing = block[index];
+    if (KWTM_shouldSkipStaleRow_(row, existing, updatedAtColumnIndex)) return;
+    // A row whose only difference is its timestamp is not an edit. Rewriting it anyway
+    // would hand this client precedence over another client's real, older-timestamped
+    // change on the next sync -- notably for Events, whose updatedAt is stamped fresh on
+    // every push because the payload carries no per-note timestamp of its own.
+    if (KWTM_rowMatchesIgnoringUpdatedAt_(row, existing, width, updatedAtColumnIndex)) return;
+    for (var column = 0; column < width; column += 1) existing[column] = row[column];
   });
 
-  if (rowsToAppend.length) {
-    var appendStart = sheet.getLastRow() + 1;
-    KWTM_ensureSheetSize_(sheet, appendStart + rowsToAppend.length - 1, width);
-    sheet.getRange(appendStart, 1, rowsToAppend.length, width).setValues(rowsToAppend);
-  }
+  KWTM_ensureSheetSize_(sheet, block.length + 1, readWidth);
+  sheet.getRange(1, 1, 1, width).setValues([header]);
+  if (block.length) sheet.getRange(2, 1, block.length, readWidth).setValues(block);
 
-  KWTM_deleteRows_(sheet, Object.keys(pruneRowNumbers).map(Number));
+  var pruneRowNumbers = [];
+  block.forEach(function (row, index) {
+    if (KWTM_shouldPruneDeletedRow_(row, deletedColumnIndex, updatedAtColumnIndex)) {
+      pruneRowNumbers.push(index + 2);
+    }
+  });
+  KWTM_deleteRows_(sheet, pruneRowNumbers);
+}
+
+function KWTM_padRow_(row, width) {
+  var next = row.slice(0, width);
+  while (next.length < width) next.push("");
+  return next;
+}
+
+function KWTM_rowMatchesIgnoringUpdatedAt_(incomingRow, existingRow, width, updatedAtColumnIndex) {
+  for (var column = 0; column < width; column += 1) {
+    if (column === updatedAtColumnIndex) continue;
+    if (String(incomingRow[column] === undefined ? "" : incomingRow[column]) !==
+        String(existingRow[column] === undefined ? "" : existingRow[column])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function KWTM_shouldSkipStaleRow_(incomingRow, existingRow, updatedAtColumnIndex) {
@@ -598,23 +801,45 @@ function KWTM_shouldPruneDeletedRow_(row, deletedColumnIndex, updatedAtColumnInd
   return Boolean(deleted && updatedAt && updatedAt < cutoff);
 }
 
+/**
+ * Deletes the given row numbers, bottom-up, collapsing consecutive rows into one call.
+ *
+ * Bottom-up keeps every not-yet-deleted row number valid as the sheet shifts up. The run
+ * grouping matters when a batch of tombstones ages out together: 40 expired rows was 40
+ * deleteRow calls, and now it is one.
+ */
 function KWTM_deleteRows_(sheet, rowNumbers) {
-  rowNumbers
-    .sort(function (a, b) {
-      return b - a;
-    })
-    .filter(function (rowNumber) {
-      return rowNumber > 1;
-    })
-    .forEach(function (rowNumber) {
-      sheet.deleteRow(rowNumber);
-    });
+  var seen = {};
+  var sorted = [];
+  (rowNumbers || []).forEach(function (rowNumber) {
+    if (rowNumber <= 1 || seen[rowNumber]) return;
+    seen[rowNumber] = true;
+    sorted.push(rowNumber);
+  });
+  if (!sorted.length) return;
+
+  sorted.sort(function (a, b) {
+    return b - a;
+  });
+
+  var runEnd = sorted[0];
+  var runStart = runEnd;
+  for (var i = 1; i <= sorted.length; i += 1) {
+    var rowNumber = sorted[i];
+    if (rowNumber === runStart - 1) {
+      runStart = rowNumber;
+      continue;
+    }
+    sheet.deleteRows(runStart, runEnd - runStart + 1);
+    if (rowNumber === undefined) return;
+    runEnd = rowNumber;
+    runStart = rowNumber;
+  }
 }
 
 function KWTM_overwriteRows_(ss, tabName, rows) {
   var normalized = KWTM_normalizeRows_(rows);
   var sheet = ss.getSheetByName(tabName) || ss.insertSheet(tabName);
-  KWTM_backupTab_(ss, tabName, sheet);
   sheet.clearContents();
   if (!normalized.length) return;
 
@@ -634,6 +859,39 @@ function KWTM_normalizeRows_(rows) {
     while (next.length < width) next.push("");
     return next;
   });
+}
+
+/**
+ * Daily snapshot of the tabs this script writes. Install with
+ * KWTM_installDailyBackupTrigger, or run by hand from the Apps Script editor.
+ *
+ * Backups used to be taken inline, from KWTM_upsertRows_, on the first write of each day.
+ * That put a full copy of four tabs on the critical path of whichever save happened to be
+ * first -- usually the morning's, which is exactly when it was most likely to be blamed on
+ * the connection. Nothing about a backup needs to happen while the user waits.
+ */
+function KWTM_dailyBackup() {
+  var ss = SpreadsheetApp.openById(KWTM_privateSheetId_({}));
+  var tabNames = KWTM_privateTabNames_(ss);
+  var backedUp = [];
+
+  [tabNames.tasks, tabNames.dailyEvents, tabNames.categories, tabNames.bills].forEach(function (tabName) {
+    var sheet = ss.getSheetByName(tabName);
+    if (!sheet) return;
+    KWTM_backupTab_(ss, tabName, sheet);
+    backedUp.push(tabName);
+  });
+
+  return { backedUp: backedUp, on: KWTM_todayKey_() };
+}
+
+/** Run once from the Apps Script editor to schedule KWTM_dailyBackup for ~3am. */
+function KWTM_installDailyBackupTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "KWTM_dailyBackup") ScriptApp.deleteTrigger(trigger);
+  });
+  ScriptApp.newTrigger("KWTM_dailyBackup").timeBased().atHour(3).everyDays(1).create();
+  return "Daily backup trigger installed for ~3am " + Session.getScriptTimeZone() + ".";
 }
 
 function KWTM_backupTab_(ss, tabName, sourceSheet) {

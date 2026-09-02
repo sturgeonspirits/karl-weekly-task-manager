@@ -58,10 +58,14 @@ Apps Script versioning rule: every `apps-script/Code.gs` revision must start wit
 3. Paste the contents of `apps-script/Code.gs`.
 4. In Apps Script project settings, add this script property:
    - `KWTM_SYNC_TOKEN`
-5. Deploy the script as a web app:
+5. In the Apps Script editor, run `KWTM_installDailyBackupTrigger` once. Backups of the
+   `Tasks`, `Events`, `Categories` and `Bills` tabs are taken by a daily trigger at ~3am,
+   not on the save path, so the first save of the day is not held up copying four tabs.
+   Without this trigger no backups are taken at all.
+6. Deploy the script as a web app:
    - Execute as: Me
    - Who has access: Anyone
-6. In Netlify, add these environment variables with the `Functions` scope:
+7. In Netlify, add these environment variables with the `Functions` scope:
    - `APPS_SCRIPT_SYNC_URL`: the Apps Script `/exec` web app URL
    - `APPS_SCRIPT_SYNC_TOKEN`: the same value as `KWTM_SYNC_TOKEN`
 
