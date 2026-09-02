@@ -1,7 +1,7 @@
 import { CalendarCheck, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, DailyEvents, StaffMember, Task } from "../types";
-import { addDays, compareTasksByPriority, dateFromKey, DAY_NAMES, dateKeyForWeekDay, formatLongDate, formatShortDate, toLocalDateKey, weekIdFromDate } from "../utils";
+import { addDays, compareTasksByPriority, dateFromKey, DAY_NAMES, dateKeyForWeekDay, formatLongDate, formatShortDate, toLocalDateKey, weekDayOrder, weekIdFromDate } from "../utils";
 import { categoryLabel, categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 
 type DailyAgendaViewProps = {
@@ -28,15 +28,18 @@ export function DailyAgendaView({
   onToggleTask,
   onEditTask,
 }: DailyAgendaViewProps) {
-  const weekDays = useMemo(
-    () =>
-      Array.from({ length: 7 }, (_, index) => ({
-        dayOfWeek: index + 1,
-        dateKey: dateKeyForWeekDay(weekId, index + 1),
-        label: DAY_NAMES[index],
-      })),
-    [weekId]
-  );
+  const todayKey = toLocalDateKey(new Date());
+  const weekDays = useMemo(() => {
+    const days = Array.from({ length: 7 }, (_, index) => ({
+      dayOfWeek: index + 1,
+      dateKey: dateKeyForWeekDay(weekId, index + 1),
+      label: DAY_NAMES[index],
+      isToday: dateKeyForWeekDay(weekId, index + 1) === todayKey,
+    }));
+
+    const byDayOfWeek = new Map(days.map((day) => [day.dayOfWeek, day]));
+    return weekDayOrder(weekId, todayKey).map((dayOfWeek) => byDayOfWeek.get(dayOfWeek)!);
+  }, [weekId, todayKey]);
   const tasksByDay = useMemo(() => {
     const groups = new Map<number, Task[]>();
 
@@ -91,7 +94,10 @@ export function DailyAgendaView({
             <section key={day.dateKey} className="agenda-day-section">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h3 className="text-base font-semibold text-slate-950">{day.label}</h3>
+                  <h3 className="flex flex-wrap items-center gap-2 text-base font-semibold text-slate-950">
+                    {day.label}
+                    {day.isToday ? <span className="badge border-slate-900 bg-slate-900 text-white">Today</span> : null}
+                  </h3>
                   <p className="text-sm text-slate-500">{formatLongDate(day.dateKey)}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">

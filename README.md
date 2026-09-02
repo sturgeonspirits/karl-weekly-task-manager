@@ -76,8 +76,48 @@ Apps Script versioning rule: every `apps-script/Code.gs` revision must start wit
    - `APPS_SCRIPT_SYNC_URL`: the Apps Script `/exec` web app URL
    - `APPS_SCRIPT_SYNC_TOKEN`: the same value as `KWTM_SYNC_TOKEN`
 
+### Archive (permanent record of finished work)
+
+Create an empty Google Sheet, copy its id from the URL, and set it as the
+`KWTM_ARCHIVE_SHEET_ID` script property. `KWTM_dailyBackup` then keeps a permanent,
+append-only record in that workbook: `Tasks`, `Events` and `Bills` tabs, each row carrying
+the original columns plus an `archivedAt` stamp.
+
+One row per task, holding its final state:
+
+- a task that leaves the working sheet stays readable in the archive forever
+- an edit replaces the archived row rather than adding to it, so editing never grows the file
+- a stale copy never overwrites a newer archived one
+
+Open the **Archive** tab in the app to read it. It is fetched only when that tab is opened,
+so a long history never slows down loading the app.
+
+This replaces daily snapshots rather than supplementing them. With an archive configured the
+live workbook gets no backup tabs at all, and any left by an earlier version are swept on the
+next run. That is what keeps the workbook the app reads on every sync small.
+
+Because history is preserved elsewhere, it is now safe to prune old completed tasks out of
+the live `Tasks` tab if it ever grows enough to matter.
+
+### Snapshots (fallback, only when no archive is configured)
+
+`KWTM_dailyBackup` snapshots the `Tasks`, `Events`, `Categories` and `Bills` tabs once a day
+and keeps three days. Snapshots default to hidden tabs inside the live workbook, which is
+convenient but not free: on 2026-09-02 that workbook held 34 backup tabs totalling 837,902
+characters against 271,256 characters of real data, and every sync paid for reading a file
+that was 76% snapshots.
+
+Set `KWTM_BACKUP_SHEET_ID` to the id of a separate, empty spreadsheet to move them out. The
+live workbook then stays small and every sync gets faster.
+
+Note that Google Sheets keeps its own full version history (File > Version history), which
+is a better restore path than these tabs. They exist as a quick in-sheet undo for a bad
+write, not as the only safety net -- so keep the retention short.
+
 Optional Apps Script properties:
 
 - `KWTM_PRIVATE_SHEET_ID`: defaults to the bound private sheet
 - `KWTM_STAFF_TODOS_SHEET_ID`: defaults to the staff scheduler sheet ID already in the app
 - `KWTM_PUBLIC_STAFF_SHEET_ID`: when set, autosync also updates the `Staff Schedule` tab in that public workbook
+- `KWTM_ARCHIVE_SHEET_ID`: recommended. Permanent append-only record; replaces snapshots entirely
+- `KWTM_BACKUP_SHEET_ID`: only used when no archive is configured; moves snapshot tabs out of the live workbook

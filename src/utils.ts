@@ -393,10 +393,26 @@ export function sanitizeDailyEvents(events: DailyEvents): DailyEvents {
 
   return Object.fromEntries(
     Array.from(normalized.entries()).map(([key, notes]) => {
-      const cleanNotes = notes.filter(Boolean);
-      return [key, Array.from(new Set(cleanNotes)).join("\n")];
+      // Deduplicate by LINE, not by whole note. Deduplicating whole notes could not collapse
+      // "A\nB" against "A\nB\nA\nB" -- they are different strings -- so a note that had been
+      // concatenated with itself survived every pass and grew without bound, eventually
+      // passing the 50,000-character Sheets cell limit and blocking all saves. Splitting
+      // first makes the merge idempotent, which is what stops it running away.
+      const lines = notes
+        .flatMap((note) => String(note || "").split("\n"))
+        .map((line) => line.trim())
+        .filter(Boolean);
+      return [key, capNote(Array.from(new Set(lines)).join("\n"))];
     })
   );
+}
+
+// Sheets rejects any cell over 50,000 characters, and one oversized cell fails the whole
+// write. Nothing legitimate approaches this; the cap is a backstop, not a feature.
+const MAX_NOTE_CHARS = 45_000;
+
+function capNote(note: string): string {
+  return note.length <= MAX_NOTE_CHARS ? note : note.slice(0, MAX_NOTE_CHARS);
 }
 
 export function deduplicateTasks(tasks: Task[]): Task[] {
@@ -424,4 +440,19 @@ export function deduplicateTasks(tasks: Task[]): Task[] {
 
 export function currency(value: number): string {
   return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(value || 0);
+}
+
+
+/**
+ * The order the agenda lists a week's days in: today first, then forward, wrapping the days
+ * already gone to the bottom.
+ *
+ * Only the week that actually contains today is rotated. Rotating any other week would put
+ * an arbitrary day at the top, which reads as a bug rather than a feature.
+ */
+export function weekDayOrder(weekId: string, todayKey: string): number[] {
+  const days = [1, 2, 3, 4, 5, 6, 7];
+  const todayIndex = days.findIndex((dayOfWeek) => dateKeyForWeekDay(weekId, dayOfWeek) === todayKey);
+  if (todayIndex <= 0) return days;
+  return [...days.slice(todayIndex), ...days.slice(0, todayIndex)];
 }

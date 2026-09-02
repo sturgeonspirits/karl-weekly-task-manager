@@ -1,6 +1,7 @@
-import { ArrowRightLeft, BadgeDollarSign, CalendarDays, CheckCircle2, LayoutGrid, RotateCcw, UsersRound } from "lucide-react";
+import { Archive, ArrowRightLeft, BadgeDollarSign, CalendarDays, CheckCircle2, LayoutGrid, RotateCcw, UsersRound } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BillsView } from "./components/BillsView";
+import { ArchiveView } from "./components/ArchiveView";
 import { CompletedTasksView } from "./components/CompletedTasksView";
 import { DailyAgendaView } from "./components/DailyAgendaView";
 import { GeneralRemindersPanel } from "./components/GeneralRemindersPanel";
@@ -14,10 +15,12 @@ import {
   DEFAULT_STAFF_TODOS_SHEET_ID,
   mergeDailyEventSets,
   pullAppsScriptSnapshot,
+  pullAppsScriptArchive,
   pushAppsScriptOperations,
   pushAppsScriptStaffSchedule,
   pushAppsScriptStaffTodos,
   type AppsScriptSyncConfig,
+  type ArchivedTask,
 } from "./lib/sheetsService";
 import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "./types";
 import {
@@ -58,7 +61,7 @@ const SHEET_SYNC_CONFIG: AppsScriptSyncConfig = {
   publicStaffSheetId: "",
 };
 
-type ActiveView = "weekly" | "daily" | "staff" | "bills" | "transfer" | "completed";
+type ActiveView = "weekly" | "daily" | "staff" | "bills" | "transfer" | "completed" | "archive";
 type DialogState = { open: boolean; day: number; task?: Task | null; generalReminder?: boolean };
 
 const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }> = [
@@ -68,11 +71,13 @@ const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }
   { id: "bills", label: "Bills", icon: BadgeDollarSign },
   { id: "transfer", label: "Transfer", icon: ArrowRightLeft },
   { id: "completed", label: "Completed", icon: CheckCircle2 },
+  { id: "archive", label: "Archive", icon: Archive },
 ];
 
+// The agenda, on every screen size. The week grid is a planning view; the thing you want on
+// opening the app is what is happening today, which is what the agenda leads with.
 function initialActiveView(): ActiveView {
-  if (typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches) return "daily";
-  return "weekly";
+  return "daily";
 }
 
 function normalizeTasksForWeek(tasks: Task[], weekId: string): Task[] {
@@ -157,6 +162,10 @@ function removeLocalStorageValue(key: string): void {
 export default function App() {
   const [weekId, setWeekId] = useState(() => weekIdFromDate(new Date()));
   const [activeView, setActiveView] = useState<ActiveView>(initialActiveView);
+  // Fetched on demand when the Archive view is opened, never as part of a sync.
+  const [archiveTasks, setArchiveTasks] = useState<ArchivedTask[]>([]);
+  const [archiveStatus, setArchiveStatus] = useState<"idle" | "loading" | "ready" | "error" | "unconfigured">("idle");
+  const [archiveError, setArchiveError] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [dialog, setDialog] = useState<DialogState>({ open: false, day: 1, task: null });
@@ -507,6 +516,24 @@ export default function App() {
     }
   }, [weekId, beginSync, endSync, isSyncInFlight]);
 
+  const loadArchive = useCallback(async () => {
+    setArchiveStatus("loading");
+    try {
+      const result = await pullAppsScriptArchive(SHEET_SYNC_CONFIG);
+      setArchiveTasks(result.tasks);
+      setArchiveStatus(result.configured ? "ready" : "unconfigured");
+      setArchiveError("");
+    } catch (error) {
+      setArchiveStatus("error");
+      setArchiveError(`Could not read the archive: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeView !== "archive" || archiveStatus !== "idle") return;
+    void loadArchive();
+  }, [activeView, archiveStatus, loadArchive]);
+
   useEffect(() => {
     if (autoPullStartedRef.current) return;
     autoPullStartedRef.current = true;
@@ -775,6 +802,16 @@ export default function App() {
 
           {activeView === "transfer" ? (
             <TransferPanel weekId={weekId} tasks={openScheduledTasks} categories={snapshot.categories} onTransfer={transferTasks} />
+          ) : null}
+
+          {activeView === "archive" ? (
+            <ArchiveView
+              status={archiveStatus}
+              tasks={archiveTasks}
+              error={archiveError}
+              categories={snapshot.categories}
+              onLoad={() => void loadArchive()}
+            />
           ) : null}
 
           {activeView === "completed" ? (

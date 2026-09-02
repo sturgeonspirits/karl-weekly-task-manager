@@ -633,6 +633,76 @@ export async function pushAppsScriptAll(
  * covered all three writes. Split, a failure names which write failed. Restore pushAll once
  * it has been verified against real spreadsheets rather than the in-memory test fakes.
  */
+export type ArchivedTask = {
+  id: string;
+  title: string;
+  category: string;
+  assignee?: string;
+  priority: string;
+  completed: boolean;
+  deleted: boolean;
+  weekId: string;
+  specificDate?: string;
+  archivedAt: string;
+};
+
+export type AppsScriptArchiveResponse = {
+  ok?: boolean;
+  configured?: boolean;
+  rows?: string[][];
+};
+
+/** Header-driven so the archive keeps parsing if a column is ever added or reordered. */
+export function parseArchivedTasks(rows: string[][]): ArchivedTask[] {
+  if (!rows.length) return [];
+  const header = rows[0].map((name) => String(name || "").trim());
+  const at = (name: string) => header.indexOf(name);
+  const columns = {
+    id: at("id"),
+    title: at("title"),
+    category: at("category"),
+    assignee: at("assignee"),
+    priority: at("priority"),
+    completed: at("completed"),
+    deleted: at("deleted"),
+    weekId: at("weekId"),
+    dayOfWeek: at("dayOfWeek"),
+    archivedAt: at("archivedAt"),
+  };
+
+  return rows
+    .slice(1)
+    .filter((row) => cellAt(row, columns.title))
+    .map((row) => {
+      const weekId = cellAt(row, columns.weekId);
+      const dayOfWeek = Number(cellAt(row, columns.dayOfWeek) || 0);
+      return {
+        id: cellAt(row, columns.id),
+        title: cellAt(row, columns.title),
+        category: cellAt(row, columns.category) || "Uncategorised",
+        assignee: cellAt(row, columns.assignee) || undefined,
+        priority: cellAt(row, columns.priority) || "medium",
+        completed: parseBoolean(cellAt(row, columns.completed)),
+        deleted: parseBoolean(cellAt(row, columns.deleted)),
+        weekId,
+        specificDate: weekId && dayOfWeek >= 1 && dayOfWeek <= 7 ? dateKeyForWeekDay(weekId, dayOfWeek) : undefined,
+        archivedAt: cellAt(row, columns.archivedAt),
+      };
+    });
+}
+
+/**
+ * Fetched only when the Archive view is opened, never as part of a sync, so a long history
+ * cannot slow down loading the app.
+ */
+export async function pullAppsScriptArchive(
+  config: AppsScriptSyncConfig,
+  limit = 1500
+): Promise<{ configured: boolean; tasks: ArchivedTask[] }> {
+  const data = await syncFunctionFetch<AppsScriptArchiveResponse>("pullArchive", { config, tab: "Tasks", limit });
+  return { configured: Boolean(data.configured), tasks: parseArchivedTasks(data.rows || []) };
+}
+
 export async function pushAppsScriptOperations(config: AppsScriptSyncConfig, snapshot: OperationsSnapshot): Promise<void> {
   await syncFunctionFetch("pushOperations", { config, snapshot });
 }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bill, Task } from "./types";
 import {
+  SOFT_DELETE_RETENTION_DAYS,
   applyBillPayment,
   billAmountPaid,
   billRemaining,
@@ -12,7 +13,7 @@ import {
   sanitizeBills,
   sanitizeDailyEvents,
   sanitizeTasks,
-  SOFT_DELETE_RETENTION_DAYS,
+  weekDayOrder,
 } from "./utils";
 
 function task(overrides: Partial<Task> = {}): Task {
@@ -642,5 +643,43 @@ describe("frequencyForRecurringChoice", () => {
     const edited = bill({ recurring: true, frequency: frequencyForRecurringChoice(true, "monthly") });
 
     expect(sanitizeBills([edited])[0].recurring).toBe(true);
+  });
+});
+
+describe("sanitizeDailyEvents line collapsing", () => {
+  it("collapses a note that has been concatenated with itself", () => {
+    // The runaway: duplicate sheet rows were joined on read, saved back, and joined again.
+    // Deduplicating whole notes never caught this because each pass produced a new string.
+    const doubled = "Delivery at 9\nStaff meeting\nDelivery at 9\nStaff meeting";
+    expect(sanitizeDailyEvents({ "2026-08-25": doubled })["2026-08-25"]).toBe(
+      "Delivery at 9\nStaff meeting"
+    );
+  });
+
+  it("is idempotent, so repeated syncs cannot grow a note", () => {
+    const once = sanitizeDailyEvents({ "2026-08-25": "A\nB" })["2026-08-25"];
+    const twice = sanitizeDailyEvents({ "2026-08-25": `${once}\n${once}` })["2026-08-25"];
+    expect(twice).toBe(once);
+  });
+
+  it("caps a note below the Sheets cell limit", () => {
+    const huge = Array.from({ length: 5000 }, (_, i) => `line ${i} ${"x".repeat(40)}`).join("\n");
+    expect(sanitizeDailyEvents({ "2026-08-25": huge })["2026-08-25"].length).toBeLessThanOrEqual(45000);
+  });
+});
+
+describe("weekDayOrder", () => {
+  it("puts today first and wraps the days already gone to the bottom", () => {
+    // Week of Mon 2026-08-03; today is Thursday 2026-08-06.
+    expect(weekDayOrder("2026-08-03", "2026-08-06")).toEqual([4, 5, 6, 7, 1, 2, 3]);
+  });
+
+  it("leaves Monday-first alone when today is Monday", () => {
+    expect(weekDayOrder("2026-08-03", "2026-08-03")).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it("does not rotate a week that does not contain today", () => {
+    // Rotating a week you navigated to would put an arbitrary day on top.
+    expect(weekDayOrder("2026-08-10", "2026-08-06")).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 });

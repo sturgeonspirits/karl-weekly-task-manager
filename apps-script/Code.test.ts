@@ -203,13 +203,60 @@ describe("Code.gs", () => {
       expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-02")).not.toBeNull();
     });
 
-    it("does not touch backups belonging to a different tab than the one being pruned", () => {
-      sheets.add(FakeSheet.from("_KWTM Backup - Bills - 2026-07-01", [["other tab"]]));
+    it("sweeps stale backups of every tab, not just the one it just wrote", () => {
+      // Previously each run pruned only its own prefix, so a backup of a tab that was later
+      // renamed or removed stayed in the workbook forever.
+      sheets.add(FakeSheet.from("_KWTM Backup - Bills - 2026-07-01", [["stale, orphaned"]]));
+      sheets.add(FakeSheet.from("_KWTM Backup - Bills - 2026-08-03", [["recent"]]));
       seedTasks([taskRow("t-1", "Now", 1000)]);
 
       script.KWTM_dailyBackup();
 
-      expect(sheets.getSheetByName("_KWTM Backup - Bills - 2026-07-01")).not.toBeNull();
+      expect(sheets.getSheetByName("_KWTM Backup - Bills - 2026-07-01")).toBeNull();
+      expect(sheets.getSheetByName("_KWTM Backup - Bills - 2026-08-03")).not.toBeNull();
+    });
+
+    it("keeps exactly the retention window, not one day more", () => {
+      // The comparison was `<`, so an 8-day window kept nine days of snapshots.
+      const retention = script.KWTM_BACKUP_RETENTION_DAYS;
+      expect(retention).toBe(3);
+      // System time is 2026-08-04, so the cutoff day itself (08-01) must go.
+      sheets.add(FakeSheet.from("_KWTM Backup - Tasks - 2026-08-01", [["on the cutoff"]]));
+      sheets.add(FakeSheet.from("_KWTM Backup - Tasks - 2026-08-02", [["inside window"]]));
+      seedTasks([taskRow("t-1", "Now", 1000)]);
+
+      script.KWTM_dailyBackup();
+
+      expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-01")).toBeNull();
+      expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-02")).not.toBeNull();
+    });
+
+    it("never deletes the last remaining sheet in a dedicated backup workbook", () => {
+      // A backup workbook can be nothing but backups; Sheets refuses to remove the last one.
+      const only = new FakeSpreadsheet("backup-only");
+      only.add(FakeSheet.from("_KWTM Backup - Tasks - 2026-07-01", [["ancient"]]));
+
+      expect(() => script.KWTM_pruneOldBackupTabs_(only)).not.toThrow();
+      expect(only.getSheets()).toHaveLength(1);
+    });
+
+    it("writes snapshots to a separate workbook when KWTM_BACKUP_SHEET_ID is set", () => {
+      const vault = new FakeSpreadsheet("backup-vault");
+      vault.add(FakeSheet.from("Keep", [["placeholder"]]));
+      const env = createEnvironment({
+        spreadsheets: { [PRIVATE_ID]: sheets, "backup-vault": vault },
+        properties: { KWTM_SYNC_TOKEN: "test-token", KWTM_BACKUP_SHEET_ID: "backup-vault" },
+        active: sheets,
+      });
+      const scoped = loadCodeGs(env.globals);
+      seedTasks([taskRow("t-1", "Live data", 1000)]);
+
+      const result = scoped.KWTM_dailyBackup();
+
+      expect(result.external).toBe(true);
+      // The snapshot lands in the vault, and the live workbook stays free of backup tabs.
+      expect(vault.getSheetByName("_KWTM Backup - Tasks - 2026-08-04")).not.toBeNull();
+      expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-08-04")).toBeNull();
     });
   });
 
@@ -392,6 +439,152 @@ describe("Code.gs", () => {
       const rows = wide.rows();
       expect(rows[1][1]).toBe("Edited");
       expect(rows[1][16]).toBe("hand-typed");
+    });
+  });
+
+  // The bug that filled the Events tab with 6,124 rows across 5 keys. The fakes only ever
+  // held strings, so nothing here could reproduce what Sheets actually stores.
+  describe("date-shaped keys", () => {
+    const DAILY_HEADERS = ["key", "text", "updatedAt", "deleted"];
+
+    function upsertEvents(rows: unknown[][]): void {
+      script.KWTM_upsertRows_(sheets, "Events", [DAILY_HEADERS, ...rows], 0, 2, 3);
+    }
+
+    it("matches a key the sheet stored as a Date instead of appending a duplicate", () => {
+      // getDisplayValues shows "2026-08-25"; getValues hands back a Date. Matching on the
+      // raw value never equalled the incoming string, so every sync appended another row.
+      sheets.add(
+        FakeSheet.from("Events", [DAILY_HEADERS, [new Date("2026-08-25T00:00:00"), "Delivery at 9", "1000", "FALSE"]])
+      );
+
+      upsertEvents([["2026-08-25", "Delivery at 11", "2000", "FALSE"]]);
+
+      const rows = sheets.getSheetByName("Events")!.rows();
+      expect(rows).toHaveLength(2);
+      expect(rows[1][1]).toBe("Delivery at 11");
+    });
+
+    it("collapses duplicate rows a previous run already created", () => {
+      sheets.add(
+        FakeSheet.from("Events", [
+          DAILY_HEADERS,
+          ["2026-08-25", "Note", "1000", "FALSE"],
+          ["2026-08-25", "Note", "1000", "FALSE"],
+          ["2026-08-25", "Note", "1000", "FALSE"],
+          ["2026-08-26", "Other", "1000", "FALSE"],
+        ])
+      );
+
+      upsertEvents([["2026-08-25", "Note edited", "2000", "FALSE"]]);
+
+      const rows = sheets.getSheetByName("Events")!.rows();
+      expect(rows.map((row) => row[0])).toEqual(["key", "2026-08-25", "2026-08-26"]);
+      expect(rows[1][1]).toBe("Note edited");
+    });
+
+    it("truncates a cell that would exceed the Sheets limit rather than failing the write", () => {
+      sheets.add(FakeSheet.from("Events", [DAILY_HEADERS]));
+
+      upsertEvents([["2026-08-25", "x".repeat(60000), "2000", "FALSE"]]);
+
+      const written = sheets.getSheetByName("Events")!.rows()[1][1];
+      expect(written.length).toBeLessThanOrEqual(45000);
+      expect(written).toContain("truncated by sync");
+    });
+  });
+
+  describe("archive", () => {
+    const ARCHIVE_ID = "archive-book";
+    let archive: FakeSpreadsheet;
+    let archiveScript: CodeGs;
+
+    beforeEach(() => {
+      archive = new FakeSpreadsheet(ARCHIVE_ID);
+      archive.add(FakeSheet.from("ReadMe", [["placeholder"]]));
+      const env = createEnvironment({
+        spreadsheets: { [PRIVATE_ID]: sheets, [ARCHIVE_ID]: archive },
+        properties: { KWTM_SYNC_TOKEN: "test-token", KWTM_ARCHIVE_SHEET_ID: ARCHIVE_ID },
+        active: sheets,
+      });
+      archiveScript = loadCodeGs(env.globals);
+    });
+
+    it("keeps one row per task and does not grow when nothing changed", () => {
+      seedTasks([taskRow("t-1", "First draft", 1000), taskRow("t-2", "Other", 1000)]);
+
+      const first = archiveScript.KWTM_dailyBackup();
+      expect(first.mode).toBe("archive");
+      expect(first.archived[0].added).toBe(2);
+
+      const second = archiveScript.KWTM_dailyBackup();
+      expect(second.archived[0].added).toBe(0);
+      expect(second.archived[0].updated).toBe(0);
+      expect(archive.getSheetByName("Tasks")!.rows()).toHaveLength(3);
+    });
+
+    it("replaces the archived row with the final version rather than logging edits", () => {
+      seedTasks([taskRow("t-1", "First draft", 1000)]);
+      archiveScript.KWTM_dailyBackup();
+
+      sheets.getSheetByName("Tasks")!.getRange(2, 1, 1, TASK_HEADERS.length).setValues([taskRow("t-1", "Rewritten", 2000)]);
+      const result = archiveScript.KWTM_dailyBackup();
+
+      const rows = archive.getSheetByName("Tasks")!.rows();
+      expect(rows).toHaveLength(2);
+      expect(rows[1][1]).toBe("Rewritten");
+      expect(result.archived[0].updated).toBe(1);
+    });
+
+    it("does not overwrite the archive with a stale copy of a row", () => {
+      seedTasks([taskRow("t-1", "Newer", 5000)]);
+      archiveScript.KWTM_dailyBackup();
+
+      sheets.getSheetByName("Tasks")!.getRange(2, 1, 1, TASK_HEADERS.length).setValues([taskRow("t-1", "Older", 1000)]);
+      archiveScript.KWTM_dailyBackup();
+
+      expect(archive.getSheetByName("Tasks")!.rows()[1][1]).toBe("Newer");
+    });
+
+    it("still holds a task after it is deleted from the live sheet", () => {
+      // The whole point of a record of old tasks.
+      seedTasks([taskRow("t-1", "Finished job", 1000)]);
+      archiveScript.KWTM_dailyBackup();
+
+      sheets.getSheetByName("Tasks")!.deleteRow(2);
+      archiveScript.KWTM_dailyBackup();
+
+      expect(sheets.getSheetByName("Tasks")!.rows()).toHaveLength(1);
+      expect(archive.getSheetByName("Tasks")!.rows()[1][1]).toBe("Finished job");
+    });
+
+    it("stamps each archived row with when it was captured", () => {
+      seedTasks([taskRow("t-1", "Job", 1000)]);
+      archiveScript.KWTM_dailyBackup();
+
+      const rows = archive.getSheetByName("Tasks")!.rows();
+      expect(rows[0][rows[0].length - 1]).toBe("archivedAt");
+      expect(rows[1][rows[1].length - 1]).toContain("2026-08-04");
+    });
+
+    it("sweeps the snapshot tabs an earlier version left in the live workbook", () => {
+      sheets.add(FakeSheet.from("_KWTM Backup - Tasks - 2026-09-01", [["old snapshot"]]));
+      sheets.add(FakeSheet.from("_KWTM Backup - Events - 2026-09-02", [["old snapshot"]]));
+      seedTasks([taskRow("t-1", "Job", 1000)]);
+
+      const result = archiveScript.KWTM_dailyBackup();
+
+      expect(result.snapshotTabsRemoved).toHaveLength(2);
+      expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-09-01")).toBeNull();
+    });
+
+    it("falls back to snapshots when no archive workbook is configured", () => {
+      seedTasks([taskRow("t-1", "Job", 1000)]);
+
+      const result = script.KWTM_dailyBackup();
+
+      expect(result.mode).toBe("snapshot");
+      expect(result.warning).toMatch(/KWTM_ARCHIVE_SHEET_ID/);
     });
   });
 

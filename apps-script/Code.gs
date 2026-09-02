@@ -1,4 +1,4 @@
-// KWTM_SCRIPT_VERSION: 2026-09-02.4
+// KWTM_SCRIPT_VERSION: 2026-09-02.8
 // KWTM_SCRIPT_UPDATED_AT: 2026-09-02
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
@@ -19,7 +19,7 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-09-02.4
+ * - KWTM_SCRIPT_VERSION 2026-09-02.8
  * - KWTM_SCRIPT_UPDATED_AT 2026-09-02
  * - Open the deployed web app URL in a browser to confirm the live script version.
  *
@@ -29,15 +29,25 @@
  * transient hiccup and for a real, fixable fault. Every entry point ends in KWTM_json_.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-09-02.4";
+var KWTM_SCRIPT_VERSION = "2026-09-02.8";
 var KWTM_SCRIPT_UPDATED_AT = "2026-09-02";
 
 // How long to wait for the script lock before telling the caller to come back. Kept short
 // on purpose -- see KWTM_tryLock_ for why a long wait actively makes things worse.
 var KWTM_LOCK_WAIT_MS = 8000;
+
+// Sheets refuses any cell over 50,000 characters, and one oversized cell fails the entire
+// write. Truncating below that keeps every other row saving.
+var KWTM_MAX_CELL_CHARS = 45000;
+var KWTM_TRUNCATION_MARKER = "\n[truncated by sync: cell exceeded 45000 characters]";
 var KWTM_STAFF_TODOS_SHEET_ID_FALLBACK = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 var KWTM_SOFT_DELETE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-var KWTM_BACKUP_RETENTION_DAYS = 8;
+// Three days, not eight. These snapshots live inside the workbook the app opens on every
+// single sync, so each one is a permanent tax on every read and write. Google Sheets keeps
+// its own full version history (File > Version history), which is a better restore path than
+// these tabs; they exist only as a fast in-sheet undo for a bad write, and three days of
+// that is plenty. Set KWTM_BACKUP_SHEET_ID to move them out of the live workbook entirely.
+var KWTM_BACKUP_RETENTION_DAYS = 3;
 
 // The Todos tab in the staff scheduler workbook is owned by the staff app, not by this
 // script, so its layout is fixed rather than derived from a KWTM_* header list.
@@ -189,6 +199,22 @@ function KWTM_handleRequest_(body) {
     // clients open that is six executions contending for one script lock, which is what
     // made Apps Script start shedding requests as HTML. The three actions below are kept so
     // a browser still running the old bundle keeps working during a rollout.
+    // Read-only, and deliberately its own action: the archive is not part of a normal sync,
+    // so the app fetches it only when someone opens the Archive view. Keeping it off the
+    // pull path means a large history never slows down opening the app.
+    if (body.action === "pullArchive") {
+      var archiveSpreadsheet = KWTM_archiveSpreadsheet_();
+      if (!archiveSpreadsheet) {
+        return KWTM_json_({ ok: true, configured: false, rows: [] });
+      }
+      return KWTM_json_({
+        ok: true,
+        configured: true,
+        tab: String(body.tab || "Tasks"),
+        rows: KWTM_readArchiveRows_(archiveSpreadsheet, String(body.tab || "Tasks"), Number(body.limit || 0)),
+      });
+    }
+
     if (body.action === "pushAll") {
       lock = KWTM_tryLock_();
       if (!lock) return KWTM_busyResponse_();
@@ -638,7 +664,11 @@ function KWTM_patchStaffTodos_(config, tasks) {
 
   if (block.length) {
     KWTM_ensureSheetSize_(sheet, block.length + 1, width);
-    sheet.getRange(2, 1, block.length, width).setValues(block);
+    sheet.getRange(2, 1, block.length, width).setValues(
+      block.map(function (row) {
+        return row.map(KWTM_capCell_);
+      })
+    );
   }
 
   return { skipped: false, updated: updated, inserted: inserted, closed: closed };
@@ -745,13 +775,21 @@ function KWTM_upsertRows_(ss, tabName, rows, keyColumnIndex, updatedAtColumnInde
   });
 
   var indexByKey = {};
+  var duplicateRowNumbers = [];
   block.forEach(function (row, index) {
-    var key = String(row[keyColumnIndex] || "").trim();
-    if (key && !(key in indexByKey)) indexByKey[key] = index;
+    var key = KWTM_normalizeKey_(row[keyColumnIndex]);
+    if (!key) return;
+    if (key in indexByKey) {
+      // Self-healing: a key that already has a row is a duplicate this bug created, and
+      // leaving it would let the concatenation keep multiplying. Collapse onto the first.
+      duplicateRowNumbers.push(index + 2);
+      return;
+    }
+    indexByKey[key] = index;
   });
 
   normalized.slice(1).forEach(function (row) {
-    var key = String(row[keyColumnIndex] || "").trim();
+    var key = KWTM_normalizeKey_(row[keyColumnIndex]);
     if (!key) return;
 
     var index = indexByKey[key];
@@ -772,15 +810,48 @@ function KWTM_upsertRows_(ss, tabName, rows, keyColumnIndex, updatedAtColumnInde
 
   KWTM_ensureSheetSize_(sheet, block.length + 1, readWidth);
   sheet.getRange(1, 1, 1, width).setValues([header]);
-  if (block.length) sheet.getRange(2, 1, block.length, readWidth).setValues(block);
+  if (block.length) {
+    sheet.getRange(2, 1, block.length, readWidth).setValues(
+      block.map(function (row) {
+        return row.map(KWTM_capCell_);
+      })
+    );
+  }
 
-  var pruneRowNumbers = [];
+  var pruneRowNumbers = duplicateRowNumbers.slice();
   block.forEach(function (row, index) {
     if (KWTM_shouldPruneDeletedRow_(row, deletedColumnIndex, updatedAtColumnIndex)) {
       pruneRowNumbers.push(index + 2);
     }
   });
   KWTM_deleteRows_(sheet, pruneRowNumbers);
+}
+
+/**
+ * A cell value reduced to the string the rest of the sync compares against.
+ *
+ * This exists because reads and writes disagreed about what a key is. KWTM_readRows_ uses
+ * getDisplayValues, so the app sees the Events key as the text "2026-08-25". KWTM_upsertRows_
+ * matched on getValues, and Sheets stores a date-shaped key as a real Date -- whose string
+ * form is "Mon Aug 25 2026 00:00:00 GMT-0500 (CDT)". That never equalled the incoming key,
+ * so every sync decided the row was new and appended another copy. The Events tab reached
+ * 6,124 rows across 5 distinct keys; one key had 6,081 rows. parseDailyEvents then joined
+ * all of a key's rows into one string, the app saved that string back, and the next sync
+ * joined it again -- multiplying the cell by the duplicate count until it passed the
+ * 50,000-character ceiling and blocked every save.
+ *
+ * Tasks and Bills were untouched because they key on ids like "task-..." that Sheets cannot
+ * coerce into a date. That contrast is what identified this.
+ */
+function KWTM_normalizeKey_(value) {
+  if (value instanceof Date) return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  return String(value === undefined || value === null ? "" : value).trim();
+}
+
+/** Keeps one oversized cell from failing the whole write. See KWTM_MAX_CELL_CHARS. */
+function KWTM_capCell_(value) {
+  if (typeof value !== "string" || value.length <= KWTM_MAX_CELL_CHARS) return value;
+  return value.slice(0, KWTM_MAX_CELL_CHARS - KWTM_TRUNCATION_MARKER.length) + KWTM_TRUNCATION_MARKER;
 }
 
 function KWTM_padRow_(row, width) {
@@ -884,19 +955,189 @@ function KWTM_normalizeRows_(rows) {
  * first -- usually the morning's, which is exactly when it was most likely to be blamed on
  * the connection. Nothing about a backup needs to happen while the user waits.
  */
+/**
+ * Where snapshots are written. Set the KWTM_BACKUP_SHEET_ID script property to the id of a
+ * separate, empty spreadsheet and backups stop weighing on the live workbook.
+ *
+ * This matters more than it sounds. On 2026-09-02 the private workbook held 34 backup tabs
+ * totalling 837,902 characters against 271,256 characters of real data -- 76% of the file
+ * was snapshots, and every openById, getSheets and tab lookup on the sync path paid for it.
+ * Falls back to the live workbook so a missing or unreadable property never loses a backup.
+ */
+/**
+ * The long-term record: every version of every row, appended once, kept forever.
+ *
+ * Daily full snapshots were the wrong shape for this. They stored a complete copy of each
+ * tab per day -- almost entirely identical to yesterday's, so the cost grew with the size of
+ * the sheet rather than with how much actually changed -- and they still lost anything that
+ * was edited twice between two runs. An append-only archive keyed on (id, updatedAt) records
+ * each distinct version exactly once, so it grows only when something really changes, and
+ * nothing is ever overwritten.
+ *
+ * Set KWTM_ARCHIVE_SHEET_ID to a separate empty spreadsheet's id. Returns null when it is
+ * unset or unreadable, in which case the caller falls back to snapshots.
+ */
+var KWTM_ARCHIVE_DEFAULT_LIMIT = 1500;
+var KWTM_ARCHIVE_MAX_LIMIT = 5000;
+
+/**
+ * The most recent `limit` archived rows, header first.
+ *
+ * Reads from the END of the sheet rather than the start. The archive is append-only and only
+ * ever grows, so the newest rows are the last ones, and reading the whole tab would put the
+ * request back under the timeout pressure described in the sync notes.
+ */
+function KWTM_readArchiveRows_(ss, tabName, limit) {
+  var sheet = ss.getSheetByName(tabName);
+  if (!sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < 1) return [];
+
+  var capped = Math.min(Math.max(Number(limit) || KWTM_ARCHIVE_DEFAULT_LIMIT, 1), KWTM_ARCHIVE_MAX_LIMIT);
+  var lastRow = sheet.getLastRow();
+  var width = sheet.getLastColumn();
+  var start = Math.max(2, lastRow - capped + 1);
+
+  return sheet
+    .getRange(1, 1, 1, width)
+    .getDisplayValues()
+    .concat(sheet.getRange(start, 1, lastRow - start + 1, width).getDisplayValues());
+}
+
+function KWTM_archiveSpreadsheet_() {
+  var id = KWTM_property_("KWTM_ARCHIVE_SHEET_ID");
+  if (!id) return null;
+  try {
+    return SpreadsheetApp.openById(id);
+  } catch (error) {
+    return null;
+  }
+}
+
+var KWTM_ARCHIVE_STAMP_HEADER = "archivedAt";
+
+/**
+ * Records the FINAL state of every row, one row per id, kept forever.
+ *
+ * Not a version log. Edits in progress are not interesting -- what matters is that a task
+ * which has left the live sheet is still readable afterwards. So a row already in the
+ * archive is updated in place when the live sheet has a newer version of it, and a row that
+ * disappears from the live sheet simply stays at whatever state it last had. One row per
+ * task, forever, no growth from editing.
+ *
+ * Reads with getDisplayValues so what is archived is what you would see in the sheet, and
+ * matches ids through KWTM_normalizeKey_ so a date-shaped key cannot read back differently
+ * and duplicate the whole tab -- the mistake that produced 6,081 rows for one key.
+ */
+function KWTM_archiveTab_(archiveSpreadsheet, tabName, sourceSheet, headers, keyColumnIndex, updatedAtColumnIndex) {
+  if (!sourceSheet || sourceSheet.getLastRow() < 2) return { tab: tabName, added: 0, updated: 0, skipped: "empty" };
+
+  var width = headers.length;
+  var stampIndex = width;
+  var readWidth = Math.min(sourceSheet.getLastColumn(), width);
+  var sourceRows = sourceSheet.getRange(2, 1, sourceSheet.getLastRow() - 1, readWidth).getDisplayValues();
+
+  var target = archiveSpreadsheet.getSheetByName(tabName);
+  if (!target) {
+    target = archiveSpreadsheet.insertSheet(tabName);
+    KWTM_ensureSheetSize_(target, 1, width + 1);
+    target.getRange(1, 1, 1, width + 1).setValues([headers.concat([KWTM_ARCHIVE_STAMP_HEADER])]);
+  }
+
+  var archivedRows = target.getLastRow();
+  KWTM_ensureSheetSize_(target, Math.max(archivedRows, 1), width + 1);
+  var block = (archivedRows > 1 ? target.getRange(2, 1, archivedRows - 1, width + 1).getDisplayValues() : []).map(
+    function (row) {
+      return KWTM_padRow_(row, width + 1);
+    }
+  );
+
+  var indexByKey = {};
+  block.forEach(function (row, index) {
+    var key = KWTM_normalizeKey_(row[keyColumnIndex]);
+    if (key && !(key in indexByKey)) indexByKey[key] = index;
+  });
+
+  var stamp = new Date().toISOString();
+  var added = 0;
+  var updated = 0;
+
+  sourceRows.forEach(function (row) {
+    var padded = KWTM_padRow_(row, width).map(KWTM_capCell_);
+    var key = KWTM_normalizeKey_(padded[keyColumnIndex]);
+    if (!key) return;
+
+    var index = indexByKey[key];
+    if (index === undefined) {
+      indexByKey[key] = block.push(padded.concat([stamp])) - 1;
+      added += 1;
+      return;
+    }
+
+    var existing = block[index];
+    // Nothing changed since we last saw it, so leave the archived stamp alone.
+    if (KWTM_rowMatchesIgnoringUpdatedAt_(padded, existing, width, updatedAtColumnIndex)) return;
+    if (KWTM_shouldSkipStaleRow_(padded, existing, updatedAtColumnIndex)) return;
+
+    for (var column = 0; column < width; column += 1) existing[column] = padded[column];
+    existing[stampIndex] = stamp;
+    updated += 1;
+  });
+
+  if (block.length) {
+    KWTM_ensureSheetSize_(target, block.length + 1, width + 1);
+    target.getRange(2, 1, block.length, width + 1).setValues(block);
+  }
+
+  return { tab: tabName, added: added, updated: updated, total: block.length };
+}
+
+function KWTM_backupSpreadsheet_(liveSpreadsheet) {
+  var id = KWTM_property_("KWTM_BACKUP_SHEET_ID");
+  if (!id) return liveSpreadsheet;
+  try {
+    return SpreadsheetApp.openById(id);
+  } catch (error) {
+    return liveSpreadsheet;
+  }
+}
+
 function KWTM_dailyBackup() {
   var ss = SpreadsheetApp.openById(KWTM_privateSheetId_({}));
   var tabNames = KWTM_privateTabNames_(ss);
-  var backedUp = [];
+  var archive = KWTM_archiveSpreadsheet_();
 
+  // With a real archive configured there is nothing for snapshots to add -- the archive
+  // already holds every version of every row -- so the live workbook gets no backup tabs at
+  // all, and the ones an earlier version left behind are swept.
+  if (archive) {
+    return {
+      on: KWTM_todayKey_(),
+      mode: "archive",
+      archived: [
+        KWTM_archiveTab_(archive, "Tasks", ss.getSheetByName(tabNames.tasks), KWTM_TASK_HEADERS, 0, 15),
+        KWTM_archiveTab_(archive, "Events", ss.getSheetByName(tabNames.dailyEvents), KWTM_DAILY_HEADERS, 0, 2),
+        KWTM_archiveTab_(archive, "Bills", ss.getSheetByName(tabNames.bills), KWTM_BILL_HEADERS, 0, 11),
+      ],
+      snapshotTabsRemoved: KWTM_pruneAllBackupTabs_(ss),
+    };
+  }
+
+  var target = KWTM_backupSpreadsheet_(ss);
+  var backedUp = [];
   [tabNames.tasks, tabNames.dailyEvents, tabNames.categories, tabNames.bills].forEach(function (tabName) {
     var sheet = ss.getSheetByName(tabName);
     if (!sheet) return;
-    KWTM_backupTab_(ss, tabName, sheet);
+    KWTM_backupTab_(target, tabName, sheet);
     backedUp.push(tabName);
   });
 
-  return { backedUp: backedUp, on: KWTM_todayKey_() };
+  return {
+    on: KWTM_todayKey_(),
+    mode: "snapshot",
+    warning: "Set KWTM_ARCHIVE_SHEET_ID to keep a permanent record instead of 3 days of snapshots.",
+    backedUp: backedUp,
+    pruned: KWTM_pruneOldBackupTabs_(target),
+    external: target !== ss,
+  };
 }
 
 /*
@@ -922,20 +1163,57 @@ function KWTM_backupTab_(ss, tabName, sourceSheet) {
   KWTM_ensureSheetSize_(backupSheet, values.length, values[0].length);
   backupSheet.getRange(1, 1, values.length, values[0].length).setValues(values);
   backupSheet.hideSheet();
-  KWTM_pruneOldBackupTabs_(ss, backupPrefix);
 }
 
-function KWTM_pruneOldBackupTabs_(ss, backupPrefix) {
+/**
+ * Deletes every backup tab past the retention window, whatever tab it belonged to.
+ *
+ * This used to prune only the prefix it had just written, so a backup of a tab that was
+ * later renamed or removed stayed forever. Sweeping all of them keeps orphans from
+ * accumulating in a workbook the sync path has to read.
+ */
+/** Removes every snapshot tab, whatever its date. Used once an archive supersedes them. */
+function KWTM_pruneAllBackupTabs_(ss) {
+  var sheets = ss.getSheets();
+  var remaining = sheets.length;
+  var removed = [];
+  sheets.forEach(function (sheet) {
+    var name = sheet.getName();
+    if (name.indexOf("_KWTM Backup - ") !== 0 || remaining <= 1) return;
+    ss.deleteSheet(sheet);
+    remaining -= 1;
+    removed.push(name);
+  });
+  return removed;
+}
+
+function KWTM_pruneOldBackupTabs_(ss) {
   var cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - KWTM_BACKUP_RETENTION_DAYS);
   var cutoffKey = Utilities.formatDate(cutoff, Session.getScriptTimeZone(), "yyyy-MM-dd");
 
-  ss.getSheets().forEach(function (sheet) {
+  var sheets = ss.getSheets();
+  var remaining = sheets.length;
+  var removed = [];
+
+  sheets.forEach(function (sheet) {
     var name = sheet.getName();
-    if (name.indexOf(backupPrefix) !== 0) return;
-    var dateKey = name.slice(backupPrefix.length);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey) && dateKey < cutoffKey) ss.deleteSheet(sheet);
+    if (name.indexOf("_KWTM Backup - ") !== 0) return;
+
+    var dateKey = name.slice(name.length - 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+    // `<=` not `<`: with an 8-day window the old comparison kept nine days of snapshots.
+    if (dateKey > cutoffKey) return;
+    // A spreadsheet must keep at least one sheet, and a dedicated backup workbook can be
+    // nothing but backups -- deleting the last one would throw and lose the whole run.
+    if (remaining <= 1) return;
+
+    ss.deleteSheet(sheet);
+    remaining -= 1;
+    removed.push(name);
   });
+
+  return removed;
 }
 
 function KWTM_todayKey_() {

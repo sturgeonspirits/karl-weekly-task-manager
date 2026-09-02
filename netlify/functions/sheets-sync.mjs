@@ -7,6 +7,7 @@
 // running an older bundle keeps syncing through a deploy.
 const ALLOWED_ACTIONS = new Set([
   "pull",
+  "pullArchive",
   "pushAll",
   "pushOperations",
   "pushStaffTodos",
