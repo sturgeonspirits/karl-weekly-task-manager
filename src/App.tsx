@@ -477,7 +477,7 @@ export default function App() {
       if (hasPrivateOperationsData(snapshotForSave)) {
         await pushAppsScriptOperations(SHEET_SYNC_CONFIG, snapshotForSave);
       }
-      await pushAppsScriptStaffTodos(SHEET_SYNC_CONFIG, staffTodos);
+      await pushAppsScriptStaffTodos(SHEET_SYNC_CONFIG, staffTodos, snapshotForSave.dailyEvents);
       await pushAppsScriptStaffSchedule(SHEET_SYNC_CONFIG, weekId, scheduledTasksForWeek, snapshotForSave.staff);
       lastSavedSnapshotJsonRef.current = normalizedSnapshotJson;
       writeLocalStorageValue(LAST_SYNCED_STORAGE_KEY, normalizedSnapshotJson);

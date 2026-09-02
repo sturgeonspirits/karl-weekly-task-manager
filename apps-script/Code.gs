@@ -1,4 +1,4 @@
-// KWTM_SCRIPT_VERSION: 2026-09-02.3
+// KWTM_SCRIPT_VERSION: 2026-09-02.4
 // KWTM_SCRIPT_UPDATED_AT: 2026-09-02
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
@@ -19,7 +19,7 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-09-02.3
+ * - KWTM_SCRIPT_VERSION 2026-09-02.4
  * - KWTM_SCRIPT_UPDATED_AT 2026-09-02
  * - Open the deployed web app URL in a browser to confirm the live script version.
  *
@@ -29,7 +29,7 @@
  * transient hiccup and for a real, fixable fault. Every entry point ends in KWTM_json_.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-09-02.3";
+var KWTM_SCRIPT_VERSION = "2026-09-02.4";
 var KWTM_SCRIPT_UPDATED_AT = "2026-09-02";
 
 // How long to wait for the script lock before telling the caller to come back. Kept short
@@ -172,12 +172,16 @@ function KWTM_handleRequest_(body) {
   try {
     KWTM_verifyToken_(body.token);
 
+    // Reading both workbooks in one request was the single slowest call in the app, and it
+    // has to finish inside the caller's budget or the connection is dropped and the whole
+    // refresh is lost. `scope` lets the client fetch them as two requests, each with its
+    // own budget. An absent scope still reads both, for callers running an older bundle.
     if (body.action === "pull") {
-      return KWTM_json_({
-        ok: true,
-        private: KWTM_readPrivateWorkbook_(body.config || {}),
-        staff: KWTM_readStaffWorkbook_(body.config || {}),
-      });
+      var scope = String(body.scope || "both");
+      var pulled = { ok: true };
+      if (scope === "private" || scope === "both") pulled.private = KWTM_readPrivateWorkbook_(body.config || {});
+      if (scope === "staff" || scope === "both") pulled.staff = KWTM_readStaffWorkbook_(body.config || {});
+      return KWTM_json_(pulled);
     }
 
     // One request, one lock, one execution slot. The client used to send pushOperations,
@@ -201,8 +205,12 @@ function KWTM_handleRequest_(body) {
     if (body.action === "pushStaffTodos") {
       lock = KWTM_tryLock_();
       if (!lock) return KWTM_busyResponse_();
-      var todoResult = KWTM_patchStaffTodos_(body.config || {}, body.tasks || []);
-      return KWTM_json_({ ok: true, result: todoResult });
+      var todoConfig = body.config || {};
+      var todoResult = KWTM_patchStaffTodos_(todoConfig, body.tasks || []);
+      // Same workbook, already open: mirroring the notes here costs almost nothing, where
+      // doing it from pushOperations cost that request a second openById.
+      var notesResult = KWTM_patchStaffDailyNotes_(todoConfig, body.dailyEvents || {});
+      return KWTM_json_({ ok: true, result: todoResult, notes: notesResult });
     }
 
     if (body.action === "pushStaffSchedule") {
@@ -250,6 +258,9 @@ function KWTM_pushAll_(body) {
 
   result.staffTodos = KWTM_mirror_(warnings, "staffTodos", function () {
     return KWTM_patchStaffTodos_(config, body.tasks || []);
+  });
+  result.staffNotes = KWTM_mirror_(warnings, "staffNotes", function () {
+    return KWTM_patchStaffDailyNotes_(config, (body.snapshot || {}).dailyEvents || {});
   });
   result.staffSchedule = KWTM_mirror_(warnings, "staffSchedule", function () {
     return KWTM_writeStaffSchedule_(config, body.weekId, body.scheduledTasks || [], body.staff || []);
@@ -455,7 +466,10 @@ function KWTM_writeOperations_(config, snapshot) {
     2,
     3
   );
-  KWTM_patchStaffDailyNotes_(config, dailyEvents);
+  // The staff-workbook mirror of these notes deliberately does NOT happen here. Opening a
+  // second spreadsheet inside this request roughly doubled its time, and the whole request
+  // has to finish inside the caller's budget. pushStaffTodos already has that workbook
+  // open, so the mirror rides along there instead.
 
   KWTM_upsertRows_(
     ss,

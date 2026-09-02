@@ -16,8 +16,10 @@ const ALLOWED_ACTIONS = new Set([
 // Netlify kills a synchronous function at 10s by default (26s if the limit has been raised
 // for the site). This budget must stay under whichever applies, or Netlify tears the
 // invocation down first and the client sees a bare gateway error instead of the message
-// below. Raise this only after Netlify support has raised the site's function timeout.
-const APPS_SCRIPT_FETCH_TIMEOUT_MS = 8_500;
+// below -- but it should sit as close under it as possible, because Apps Script routinely
+// needs 5-9s for a single spreadsheet operation and anything we clip is a lost sync.
+// Raise this to ~24s once Netlify support has raised the site's function timeout to 26s.
+const APPS_SCRIPT_FETCH_TIMEOUT_MS = 9_300;
 
 // Enough of the upstream body to identify which page Google served -- a sign-in
 // interstitial, a quota notice, a script error page -- without dumping a whole document

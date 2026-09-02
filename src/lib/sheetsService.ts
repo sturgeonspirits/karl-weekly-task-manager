@@ -38,9 +38,8 @@ export const DEFAULT_PRIVATE_SHEET_ID = "1NQKvTSWvpTZ3uRsYWMUPAdOa_bHvsp_VMpc7EX
 export const DEFAULT_STAFF_TODOS_SHEET_ID = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 export const APPS_SCRIPT_SYNC_FUNCTION = "/.netlify/functions/sheets-sync";
 
-// One attempt, not the whole retry budget. The Netlify function gives up on Apps Script at
-// 8.5s and Netlify itself kills the invocation at 10s, so a longer wait here only delays
-// the retry -- and, while it waits, leaves the app's sync-in-flight flag set.
+// One attempt, not the whole retry budget. Netlify kills the invocation at 10s, so a longer
+// wait here only delays the retry -- and, while it waits, leaves the sync-in-flight flag set.
 const SYNC_REQUEST_TIMEOUT_MS = 15_000;
 
 // Apps Script sheds load by serving an HTML page instead of running the script, and two
@@ -543,13 +542,23 @@ function mergeStaffLists(primary: StaffMember[], secondary: StaffMember[]): Staf
   return Array.from(byKey.values());
 }
 
+/**
+ * Pulls the two workbooks as two requests.
+ *
+ * Reading both in one Apps Script execution was the slowest call the app made, and it has
+ * to finish inside a Netlify function's 10s ceiling or the connection is dropped and the
+ * whole refresh is lost -- which is what "Apps Script did not answer in time" was. Two
+ * requests means two budgets. They run in sequence rather than in parallel so a refresh
+ * never has two executions of this script in flight at once.
+ */
 export async function pullAppsScriptSnapshot(
   config: AppsScriptSyncConfig,
   fallback: OperationsSnapshot
 ): Promise<OperationsSnapshot> {
-  const data = await syncFunctionFetch<AppsScriptPullResponse>("pull", { config });
-  const privateRows = data.private || {};
-  const staffRows = data.staff || {};
+  const privateData = await syncFunctionFetch<AppsScriptPullResponse>("pull", { config, scope: "private" });
+  const staffData = await syncFunctionFetch<AppsScriptPullResponse>("pull", { config, scope: "staff" });
+  const privateRows = privateData.private || {};
+  const staffRows = staffData.staff || {};
   const privateTaskRows = privateRows.tasks || [];
   const privateTaskTab = String(privateRows.taskTab || "");
 
@@ -628,8 +637,15 @@ export async function pushAppsScriptOperations(config: AppsScriptSyncConfig, sna
   await syncFunctionFetch("pushOperations", { config, snapshot });
 }
 
-export async function pushAppsScriptStaffTodos(config: AppsScriptSyncConfig, tasks: Task[]): Promise<void> {
-  await syncFunctionFetch("pushStaffTodos", { config, tasks });
+export async function pushAppsScriptStaffTodos(
+  config: AppsScriptSyncConfig,
+  tasks: Task[],
+  dailyEvents: DailyEvents
+): Promise<void> {
+  // dailyEvents rides along here because this request already has the staff workbook open.
+  // Mirroring them from pushOperations made that request open a second spreadsheet, which
+  // it could not afford inside the caller's budget.
+  await syncFunctionFetch("pushStaffTodos", { config, tasks, dailyEvents });
 }
 
 export async function pushAppsScriptStaffSchedule(
