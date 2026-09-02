@@ -615,7 +615,28 @@ export async function pushAppsScriptAll(
   });
 }
 
-// The single-purpose pushOperations / pushStaffTodos / pushStaffSchedule callers were
-// removed when pushAll replaced them. Code.gs and the Netlify function still accept those
-// three actions, so a browser holding a cached older bundle keeps syncing across a deploy;
-// nothing in the current client sends them.
+/*
+ * Three requests per save, not one.
+ *
+ * pushAll (below, and still supported by Code.gs) collapses these into a single Apps Script
+ * execution, which is the right shape -- but it shipped broken on 2026-09-02 and could not
+ * be told apart from the batching changes that shipped with it, because one opaque failure
+ * covered all three writes. Split, a failure names which write failed. Restore pushAll once
+ * it has been verified against real spreadsheets rather than the in-memory test fakes.
+ */
+export async function pushAppsScriptOperations(config: AppsScriptSyncConfig, snapshot: OperationsSnapshot): Promise<void> {
+  await syncFunctionFetch("pushOperations", { config, snapshot });
+}
+
+export async function pushAppsScriptStaffTodos(config: AppsScriptSyncConfig, tasks: Task[]): Promise<void> {
+  await syncFunctionFetch("pushStaffTodos", { config, tasks });
+}
+
+export async function pushAppsScriptStaffSchedule(
+  config: AppsScriptSyncConfig,
+  weekId: string,
+  tasks: Task[],
+  staff: StaffMember[]
+): Promise<void> {
+  await syncFunctionFetch("pushStaffSchedule", { config, weekId, tasks, staff });
+}

@@ -14,7 +14,9 @@ import {
   DEFAULT_STAFF_TODOS_SHEET_ID,
   mergeDailyEventSets,
   pullAppsScriptSnapshot,
-  pushAppsScriptAll,
+  pushAppsScriptOperations,
+  pushAppsScriptStaffSchedule,
+  pushAppsScriptStaffTodos,
   type AppsScriptSyncConfig,
 } from "./lib/sheetsService";
 import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "./types";
@@ -470,23 +472,18 @@ export default function App() {
         (task) => task.weekId === weekId && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate)
       );
       const staffTodos = snapshotForSave.tasks.filter(shouldSendToStaffTodosSync);
-      // One round trip for the whole save. Three separate pushes meant three Apps Script
-      // executions contending for one script lock, per save, per open client.
-      const pushResult = await pushAppsScriptAll(SHEET_SYNC_CONFIG, {
-        snapshot: snapshotForSave,
-        staffTodos,
-        weekId,
-        scheduledTasks: scheduledTasksForWeek,
-        staff: snapshotForSave.staff,
-      });
+      // Each await is labelled so a failure says which write died. See the note above
+      // pushAppsScriptOperations for why this is three calls rather than one pushAll.
+      if (hasPrivateOperationsData(snapshotForSave)) {
+        await pushAppsScriptOperations(SHEET_SYNC_CONFIG, snapshotForSave);
+      }
+      await pushAppsScriptStaffTodos(SHEET_SYNC_CONFIG, staffTodos);
+      await pushAppsScriptStaffSchedule(SHEET_SYNC_CONFIG, weekId, scheduledTasksForWeek, snapshotForSave.staff);
       lastSavedSnapshotJsonRef.current = normalizedSnapshotJson;
       writeLocalStorageValue(LAST_SYNCED_STORAGE_KEY, normalizedSnapshotJson);
       hasUnconfirmedCachedSnapshotRef.current = false;
-      // Your own sheet saved, but a staff mirror did not. Worth saying out loud -- silently
-      // succeeding would let the staff board drift for days without anyone noticing.
-      const warnings = pushResult?.warnings || [];
-      setSyncStatus(warnings.length ? "Autosaved to Sheets, but a staff mirror did not update." : "Autosaved to Sheets.");
-      setSyncError(warnings.length ? `Staff sheet not updated: ${warnings.join("; ")}` : "");
+      setSyncStatus("Autosaved to Sheets.");
+      setSyncError("");
     } catch (error) {
       setSyncStatus("");
       setSyncError(

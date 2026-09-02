@@ -1,4 +1,4 @@
-// KWTM_SCRIPT_VERSION: 2026-09-02.2
+// KWTM_SCRIPT_VERSION: 2026-09-02.3
 // KWTM_SCRIPT_UPDATED_AT: 2026-09-02
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
@@ -19,7 +19,7 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-09-02.2
+ * - KWTM_SCRIPT_VERSION 2026-09-02.3
  * - KWTM_SCRIPT_UPDATED_AT 2026-09-02
  * - Open the deployed web app URL in a browser to confirm the live script version.
  *
@@ -29,7 +29,7 @@
  * transient hiccup and for a real, fixable fault. Every entry point ends in KWTM_json_.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-09-02.2";
+var KWTM_SCRIPT_VERSION = "2026-09-02.3";
 var KWTM_SCRIPT_UPDATED_AT = "2026-09-02";
 
 // How long to wait for the script lock before telling the caller to come back. Kept short
@@ -885,14 +885,16 @@ function KWTM_dailyBackup() {
   return { backedUp: backedUp, on: KWTM_todayKey_() };
 }
 
-/** Run once from the Apps Script editor to schedule KWTM_dailyBackup for ~3am. */
-function KWTM_installDailyBackupTrigger() {
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === "KWTM_dailyBackup") ScriptApp.deleteTrigger(trigger);
-  });
-  ScriptApp.newTrigger("KWTM_dailyBackup").timeBased().atHour(3).everyDays(1).create();
-  return "Daily backup trigger installed for ~3am " + Session.getScriptTimeZone() + ".";
-}
+/*
+ * KWTM_dailyBackup is scheduled from the Triggers panel (clock icon) in the Apps Script
+ * editor, NOT from code. An installer function here would have to call the trigger
+ * service, and merely referencing that service anywhere in the file adds its OAuth scope
+ * to the whole project. Changing a deployed web app's scope set makes its anonymous
+ * requests fail until the owner re-authorizes and redeploys -- and that failure happens in
+ * the runtime, before doPost runs, so the try/catch above cannot turn it into JSON. The
+ * caller just sees an HTML error page. Not worth it for a convenience function that is run
+ * exactly once. See the README for the four clicks that replace it.
+ */
 
 function KWTM_backupTab_(ss, tabName, sourceSheet) {
   if (!sourceSheet || sourceSheet.getLastRow() < 1 || sourceSheet.getLastColumn() < 1) return;

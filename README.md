@@ -58,10 +58,17 @@ Apps Script versioning rule: every `apps-script/Code.gs` revision must start wit
 3. Paste the contents of `apps-script/Code.gs`.
 4. In Apps Script project settings, add this script property:
    - `KWTM_SYNC_TOKEN`
-5. In the Apps Script editor, run `KWTM_installDailyBackupTrigger` once. Backups of the
-   `Tasks`, `Events`, `Categories` and `Bills` tabs are taken by a daily trigger at ~3am,
-   not on the save path, so the first save of the day is not held up copying four tabs.
-   Without this trigger no backups are taken at all.
+5. Add the daily backup trigger, once per project, from the Apps Script editor's Triggers
+   panel (the clock icon): Add Trigger > function `KWTM_dailyBackup`, event source
+   Time-driven, Day timer, 3am-4am. Backups of the `Tasks`, `Events`, `Categories` and
+   `Bills` tabs run from that trigger rather than on the save path, so the first save of the
+   day is not held up copying four tabs. Without the trigger no backups are taken at all.
+
+   Do not add an installer function that calls the trigger service from `Code.gs`. Referencing
+   that service anywhere in the file widens the project's OAuth scopes, and a deployed web
+   app whose scope set has changed fails every anonymous request until it is re-authorized
+   and redeployed. That failure happens before `doPost` runs, so it cannot be caught and
+   returned as JSON -- the caller only sees an HTML error page.
 6. Deploy the script as a web app:
    - Execute as: Me
    - Who has access: Anyone
