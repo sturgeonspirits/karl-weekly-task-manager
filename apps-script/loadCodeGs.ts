@@ -35,6 +35,8 @@ const EXPORTED = [
   "KWTM_archiveSpreadsheet_",
   "KWTM_archiveTab_",
   "KWTM_pruneAllBackupTabs_",
+  "KWTM_repairWorkbooks",
+  "KWTM_STAFF_TODOS_SHEET_ID_FALLBACK",
   "KWTM_patchStaffTodos_",
   "KWTM_privateTabNames_",
   "KWTM_handleRequest_",

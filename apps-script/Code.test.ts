@@ -588,6 +588,51 @@ describe("Code.gs", () => {
     });
   });
 
+  describe("repairWorkbooks", () => {
+    const STAFF_ID = "staff-book";
+
+    it("collapses duplicate keys and sweeps snapshots in both workbooks", () => {
+      // The state the staff workbook was actually found in: thousands of rows, few keys, plus
+      // orphaned snapshot tabs nothing was pruning.
+      const staff = new FakeSpreadsheet(STAFF_ID);
+      staff.add(
+        FakeSheet.from("DailyNotes", [
+          ["key", "text", "updatedAt", "deleted"],
+          ["2026-08-25", "Plan-c", "1000", "FALSE"],
+          ["2026-08-25", "Plan-c", "1000", "FALSE"],
+          ["2026-08-25", "Plan-c", "1000", "FALSE"],
+          ["2026-08-26", "Cribbage", "1000", "FALSE"],
+        ])
+      );
+      staff.add(FakeSheet.from("_KWTM Backup - DailyNotes - 2026-09-01", [["orphan"]]));
+      sheets.add(
+        FakeSheet.from("Events", [
+          ["key", "text", "updatedAt", "deleted"],
+          ["2026-08-25", "Plan-c", "1000", "FALSE"],
+          ["2026-08-25", "Plan-c", "1000", "FALSE"],
+        ])
+      );
+      sheets.add(FakeSheet.from("_KWTM Backup - Tasks - 2026-09-01", [["orphan"]]));
+      seedTasks([taskRow("t-1", "Live", 1000)]);
+
+      const env = createEnvironment({
+        spreadsheets: { [PRIVATE_ID]: sheets, [STAFF_ID]: staff },
+        properties: { KWTM_SYNC_TOKEN: "test-token", KWTM_STAFF_TODOS_SHEET_ID: STAFF_ID },
+        active: sheets,
+      });
+      const repairScript = loadCodeGs(env.globals);
+
+      const report = repairScript.KWTM_repairWorkbooks();
+
+      expect(report.privateEvents).toBe(1);
+      expect(report.staffDailyNotes).toBe(2);
+      expect(staff.getSheetByName("_KWTM Backup - DailyNotes - 2026-09-01")).toBeNull();
+      expect(sheets.getSheetByName("_KWTM Backup - Tasks - 2026-09-01")).toBeNull();
+      // The surviving rows keep their content, not just their count.
+      expect(staff.getSheetByName("DailyNotes")!.rows()[1][1]).toBe("Plan-c");
+    });
+  });
+
   describe("tab resolution", () => {
     it("writes back to the tab it read from rather than creating the canonical name", () => {
       // A workbook whose tasks live in "Task List" used to be read from there and written

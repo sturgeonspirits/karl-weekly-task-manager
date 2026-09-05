@@ -114,6 +114,19 @@ Note that Google Sheets keeps its own full version history (File > Version histo
 is a better restore path than these tabs. They exist as a quick in-sheet undo for a bad
 write, not as the only safety net -- so keep the retention short.
 
+### Function timeout
+
+Every sync has to finish inside the lifetime of a Netlify function: 10 seconds by default,
+26 seconds once Netlify support raises the limit for the site (a Pro-plan option). Apps
+Script routinely needs 5-9 seconds for one spreadsheet operation, so the default leaves very
+little headroom, and running out of it is what produced every "Apps Script did not answer"
+and "returned 200 with a non-JSON body" failure.
+
+The wait is set by the `APPS_SCRIPT_FETCH_TIMEOUT_MS` Netlify environment variable, so it can
+be changed without touching code. Unset, it is 9,300ms -- just under the 10s default. Once
+Netlify raises this site to 26s, set it to `24000` and redeploy. It is clamped to 25,000ms so
+a typo cannot push it past what Netlify allows.
+
 Optional Apps Script properties:
 
 - `KWTM_PRIVATE_SHEET_ID`: defaults to the bound private sheet

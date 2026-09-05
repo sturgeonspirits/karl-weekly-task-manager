@@ -14,13 +14,31 @@ const ALLOWED_ACTIONS = new Set([
   "pushStaffSchedule",
 ]);
 
-// Netlify kills a synchronous function at 10s by default (26s if the limit has been raised
-// for the site). This budget must stay under whichever applies, or Netlify tears the
-// invocation down first and the client sees a bare gateway error instead of the message
-// below -- but it should sit as close under it as possible, because Apps Script routinely
-// needs 5-9s for a single spreadsheet operation and anything we clip is a lost sync.
-// Raise this to ~24s once Netlify support has raised the site's function timeout to 26s.
-const APPS_SCRIPT_FETCH_TIMEOUT_MS = 9_300;
+/*
+ * How long to wait for Apps Script, in milliseconds.
+ *
+ * Netlify kills a synchronous function at 10s by default, or 26s once support raises the
+ * limit for a site. This budget has to sit just under whichever applies: too high and Netlify
+ * tears the invocation down first, so the caller gets a bare gateway error instead of the
+ * clean retryable message below; too low and we clip a sync that would have succeeded, since
+ * Apps Script routinely needs 5-9s for a single spreadsheet operation.
+ *
+ * It reads from an environment variable so raising it does not need a code change. When
+ * Netlify raises this site to 26s, set APPS_SCRIPT_FETCH_TIMEOUT_MS to 24000 in the Netlify
+ * UI and redeploy -- nothing here has to be edited, and the value can be put back just as
+ * fast if the raise is ever reverted.
+ */
+const DEFAULT_FETCH_TIMEOUT_MS = 9_300;
+// Hard ceiling: even with the 26s limit, leave Netlify room to return our response.
+const MAX_FETCH_TIMEOUT_MS = 25_000;
+const MIN_FETCH_TIMEOUT_MS = 2_000;
+
+function appsScriptFetchTimeoutMs() {
+  const configured = Number(process.env.APPS_SCRIPT_FETCH_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_FETCH_TIMEOUT_MS;
+  // Clamped rather than trusted: a typo here would otherwise silently break every sync.
+  return Math.min(Math.max(configured, MIN_FETCH_TIMEOUT_MS), MAX_FETCH_TIMEOUT_MS);
+}
 
 // Enough of the upstream body to identify which page Google served -- a sign-in
 // interstitial, a quota notice, a script error page -- without dumping a whole document
@@ -124,8 +142,9 @@ export async function handler(event) {
     });
   }
 
+  const budgetMs = appsScriptFetchTimeoutMs();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), APPS_SCRIPT_FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), budgetMs);
 
   try {
     const response = await fetch(syncUrl, {
@@ -162,7 +181,7 @@ export async function handler(event) {
       return json(504, {
         ok: false,
         retryable: true,
-        error: `Apps Script did not answer within ${Math.round(APPS_SCRIPT_FETCH_TIMEOUT_MS / 1000)}s.`,
+        error: `Apps Script did not answer within ${Math.round(budgetMs / 1000)}s.`,
       });
     }
     // A dropped connection to Google is transient far more often than not.

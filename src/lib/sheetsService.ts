@@ -38,9 +38,11 @@ export const DEFAULT_PRIVATE_SHEET_ID = "1NQKvTSWvpTZ3uRsYWMUPAdOa_bHvsp_VMpc7EX
 export const DEFAULT_STAFF_TODOS_SHEET_ID = "1TsSonscE_UZ9A80tLSVxdnKQx_udYWGWQejTPh17wtg";
 export const APPS_SCRIPT_SYNC_FUNCTION = "/.netlify/functions/sheets-sync";
 
-// One attempt, not the whole retry budget. Netlify kills the invocation at 10s, so a longer
-// wait here only delays the retry -- and, while it waits, leaves the sync-in-flight flag set.
-const SYNC_REQUEST_TIMEOUT_MS = 15_000;
+// One attempt, not the whole retry budget. This only fires if the function itself hangs --
+// normally Netlify returns first, either with our JSON or with its own gateway error. It has
+// to stay above the function's own budget (up to 25s once the site's Netlify timeout is
+// raised to 26s) or the client would abort a request that was about to succeed.
+const SYNC_REQUEST_TIMEOUT_MS = 30_000;
 
 // Apps Script sheds load by serving an HTML page instead of running the script, and two
 // clients (a browser tab and the installed app) racing the same script lock is enough to

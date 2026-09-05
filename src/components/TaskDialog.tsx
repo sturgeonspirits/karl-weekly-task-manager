@@ -56,6 +56,24 @@ function createForm(
   };
 }
 
+/**
+ * Identifies WHICH form is on screen, so the dialog can tell "a different task was opened"
+ * apart from "the same task arrived as a new object".
+ *
+ * The form used to be rebuilt whenever any prop changed identity, and `task`, `categories`
+ * and `staff` all come from the synced snapshot. Every background refresh handed the dialog
+ * new object references with identical content, the effect re-ran, and setForm threw away
+ * whatever was half-typed. Comparing this string instead means a refresh mid-edit is ignored.
+ */
+export function taskFormIdentity(
+  task: Task | null | undefined,
+  defaultDay: number,
+  defaultGeneralReminder: boolean
+): string {
+  if (task?.id) return `task:${task.id}`;
+  return `new:${defaultDay}:${defaultGeneralReminder ? "reminder" : "scheduled"}`;
+}
+
 function dayOfWeekFromDateKey(dateKey: string, fallback: number): number {
   if (!isIsoDateKey(dateKey)) return fallback;
   const day = dateFromKey(dateKey).getDay();
@@ -76,14 +94,25 @@ export function TaskDialog({
 }: TaskDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [form, setForm] = useState<TaskForm>(() => createForm(task, weekId, defaultDay, categories, staff, defaultGeneralReminder));
+  // Which form is currently loaded. Null while closed, so reopening always rebuilds.
+  const loadedFormRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (open) {
-      setForm(createForm(task, weekId, defaultDay, categories, staff, defaultGeneralReminder));
-      if (!dialogRef.current?.open) dialogRef.current?.showModal();
-    } else if (dialogRef.current?.open) {
-      dialogRef.current.close();
+    if (!open) {
+      loadedFormRef.current = null;
+      if (dialogRef.current?.open) dialogRef.current.close();
+      return;
     }
+
+    // Rebuild only when a genuinely different task is opened. Without this guard a sync
+    // landing mid-edit wiped the fields, because it hands every prop a new identity.
+    const identity = taskFormIdentity(task, defaultDay, defaultGeneralReminder);
+    if (loadedFormRef.current !== identity) {
+      loadedFormRef.current = identity;
+      setForm(createForm(task, weekId, defaultDay, categories, staff, defaultGeneralReminder));
+    }
+
+    if (!dialogRef.current?.open) dialogRef.current?.showModal();
   }, [categories, defaultDay, defaultGeneralReminder, open, staff, task, weekId]);
 
   const isEditing = Boolean(task);

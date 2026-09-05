@@ -169,6 +169,8 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [dialog, setDialog] = useState<DialogState>({ open: false, day: 1, task: null });
+  // Read by the auto-pull interval, which closes over its own scope and cannot see state.
+  const dialogOpenRef = useRef(false);
   const [snapshot, setSnapshot] = useState<OperationsSnapshot>(() => loadSnapshot(weekId));
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
@@ -203,6 +205,10 @@ export default function App() {
   useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
+
+  useEffect(() => {
+    dialogOpenRef.current = dialog.open;
+  }, [dialog.open]);
 
   useEffect(() => {
     writeLocalStorageValue(STORAGE_KEY, snapshotJson);
@@ -560,6 +566,9 @@ export default function App() {
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (document.visibilityState !== "visible" || autoSaveTimerRef.current || retrySaveTimerRef.current) return;
+      // Never refresh under an open editor. Applying a pulled snapshot mid-edit swaps the
+      // task being edited for a different object, and anything typed since is at risk.
+      if (dialogOpenRef.current) return;
       const current = snapshotRef.current;
       const currentJson = JSON.stringify(current);
       if (lastSavedSnapshotJsonRef.current !== currentJson) {

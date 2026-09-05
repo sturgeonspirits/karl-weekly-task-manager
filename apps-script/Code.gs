@@ -1,4 +1,4 @@
-// KWTM_SCRIPT_VERSION: 2026-09-02.8
+// KWTM_SCRIPT_VERSION: 2026-09-02.9
 // KWTM_SCRIPT_UPDATED_AT: 2026-09-02
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
@@ -19,7 +19,7 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-09-02.8
+ * - KWTM_SCRIPT_VERSION 2026-09-02.9
  * - KWTM_SCRIPT_UPDATED_AT 2026-09-02
  * - Open the deployed web app URL in a browser to confirm the live script version.
  *
@@ -29,7 +29,7 @@
  * transient hiccup and for a real, fixable fault. Every entry point ends in KWTM_json_.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-09-02.8";
+var KWTM_SCRIPT_VERSION = "2026-09-02.9";
 var KWTM_SCRIPT_UPDATED_AT = "2026-09-02";
 
 // How long to wait for the script lock before telling the caller to come back. Kept short
@@ -1117,7 +1117,7 @@ function KWTM_dailyBackup() {
         KWTM_archiveTab_(archive, "Events", ss.getSheetByName(tabNames.dailyEvents), KWTM_DAILY_HEADERS, 0, 2),
         KWTM_archiveTab_(archive, "Bills", ss.getSheetByName(tabNames.bills), KWTM_BILL_HEADERS, 0, 11),
       ],
-      snapshotTabsRemoved: KWTM_pruneAllBackupTabs_(ss),
+      snapshotTabsRemoved: KWTM_pruneAllBackupTabs_(ss).concat(KWTM_pruneStaffBackupTabs_(tabNames)),
     };
   }
 
@@ -1172,6 +1172,62 @@ function KWTM_backupTab_(ss, tabName, sourceSheet) {
  * later renamed or removed stayed forever. Sweeping all of them keeps orphans from
  * accumulating in a workbook the sync path has to read.
  */
+/**
+ * The staff workbook collects snapshot tabs too, and nothing was ever cleaning them.
+ *
+ * KWTM_patchStaffDailyNotes_ writes through KWTM_upsertRows_, which used to take a backup
+ * inline -- so the staff workbook accumulated its own `_KWTM Backup - DailyNotes - <date>`
+ * tabs. Pruning only ever looked at the private workbook, so those were orphaned: 9 tabs and
+ * about 536,000 characters, all of it read on the staff half of every pull.
+ */
+function KWTM_pruneStaffBackupTabs_(config) {
+  var spreadsheetId = KWTM_staffTodosSheetId_(config || {});
+  if (!spreadsheetId) return [];
+  try {
+    return KWTM_pruneAllBackupTabs_(SpreadsheetApp.openById(spreadsheetId));
+  } catch (error) {
+    return [];
+  }
+}
+
+/**
+ * One-off maintenance: collapse duplicate-key rows and sweep snapshot tabs in both workbooks.
+ *
+ * Run this by hand from the editor when a workbook has already accumulated damage. The
+ * ordinary sync collapses duplicates as it writes, but that only helps if a write succeeds --
+ * and once a tab is bloated enough, the write is exactly what times out. This does the
+ * collapse without needing the app to complete a sync first.
+ *
+ * Passing just a header row to KWTM_upsertRows_ updates nothing and rewrites the block, which
+ * is all the collapse needs.
+ */
+function KWTM_repairWorkbooks() {
+  var ss = SpreadsheetApp.openById(KWTM_privateSheetId_({}));
+  var tabNames = KWTM_privateTabNames_(ss);
+  var report = { privateSnapshotsRemoved: KWTM_pruneAllBackupTabs_(ss) };
+
+  KWTM_upsertRows_(ss, tabNames.dailyEvents, [KWTM_DAILY_HEADERS], 0, 2, 3);
+  report.privateEvents = KWTM_rowCount_(ss, tabNames.dailyEvents);
+
+  var staffId = KWTM_staffTodosSheetId_({});
+  if (staffId) {
+    var staff = SpreadsheetApp.openById(staffId);
+    report.staffSnapshotsRemoved = KWTM_pruneAllBackupTabs_(staff);
+    var notesTab = KWTM_pickTab_(KWTM_sheetTitles_(staff), ["DailyNotes", "Daily Notes", "Events", "Notes", "Daily Agenda"]);
+    if (notesTab) {
+      KWTM_upsertRows_(staff, notesTab, [KWTM_DAILY_HEADERS], 0, 2, 3);
+      report.staffDailyNotes = KWTM_rowCount_(staff, notesTab);
+    }
+  }
+
+  return report;
+}
+
+function KWTM_rowCount_(ss, tabName) {
+  var sheet = ss.getSheetByName(tabName);
+  return sheet ? Math.max(sheet.getLastRow() - 1, 0) : 0;
+}
+
 /** Removes every snapshot tab, whatever its date. Used once an archive supersedes them. */
 function KWTM_pruneAllBackupTabs_(ss) {
   var sheets = ss.getSheets();
