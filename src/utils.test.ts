@@ -9,11 +9,12 @@ import {
   ensureRecurringTasksForWeek,
   frequencyForRecurringChoice,
   isPartiallyPaid,
+  rollingAgendaDays,
   roundCurrency,
   sanitizeBills,
   sanitizeDailyEvents,
   sanitizeTasks,
-  weekDayOrder,
+  weekIdsForAgendaWindow,
 } from "./utils";
 
 function task(overrides: Partial<Task> = {}): Task {
@@ -668,18 +669,33 @@ describe("sanitizeDailyEvents line collapsing", () => {
   });
 });
 
-describe("weekDayOrder", () => {
-  it("puts today first and wraps the days already gone to the bottom", () => {
-    // Week of Mon 2026-08-03; today is Thursday 2026-08-06.
-    expect(weekDayOrder("2026-08-03", "2026-08-06")).toEqual([4, 5, 6, 7, 1, 2, 3]);
+
+describe("rollingAgendaDays", () => {
+  it("returns the anchor day plus the next seven, crossing into the following week", () => {
+    // Wed 2026-09-02 through Wed 2026-09-09 — the old view wrapped back to Mon 2026-08-31.
+    expect(rollingAgendaDays("2026-09-02")).toEqual([
+      "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05",
+      "2026-09-06", "2026-09-07", "2026-09-08", "2026-09-09",
+    ]);
   });
 
-  it("leaves Monday-first alone when today is Monday", () => {
-    expect(weekDayOrder("2026-08-03", "2026-08-03")).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  it("crosses a month boundary", () => {
+    expect(rollingAgendaDays("2026-08-30", 4)).toEqual(["2026-08-30", "2026-08-31", "2026-09-01", "2026-09-02"]);
   });
 
-  it("does not rotate a week that does not contain today", () => {
-    // Rotating a week you navigated to would put an arbitrary day on top.
-    expect(weekDayOrder("2026-08-10", "2026-08-06")).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  it("never revisits a day already shown", () => {
+    const days = rollingAgendaDays("2026-09-02");
+    expect(new Set(days).size).toBe(days.length);
+  });
+});
+
+describe("weekIdsForAgendaWindow", () => {
+  it("names both weeks a mid-week window spans, so recurring tasks exist for each", () => {
+    expect(weekIdsForAgendaWindow("2026-09-02")).toEqual(["2026-08-31", "2026-09-07"]);
+  });
+
+  it("still spans two weeks when the window starts on a Monday", () => {
+    // Mon + 7 days reaches the next Monday, so the second week is needed even here.
+    expect(weekIdsForAgendaWindow("2026-08-31")).toEqual(["2026-08-31", "2026-09-07"]);
   });
 });

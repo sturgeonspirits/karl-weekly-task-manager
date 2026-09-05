@@ -54,3 +54,14 @@ describe("taskFormIdentity", () => {
     expect(taskFormIdentity(null, 2, false)).not.toBe(taskFormIdentity(null, 5, false));
   });
 });
+
+describe("taskFormIdentity with an explicit date", () => {
+  it("distinguishes new tasks added to different dates in the rolling window", () => {
+    // Two Mondays are both dayOfWeek 1; only the date tells them apart.
+    expect(taskFormIdentity(null, 1, false, "2026-08-31")).not.toBe(taskFormIdentity(null, 1, false, "2026-09-07"));
+  });
+
+  it("stays stable for the same date across re-renders", () => {
+    expect(taskFormIdentity(null, 1, false, "2026-09-07")).toBe(taskFormIdentity(null, 1, false, "2026-09-07"));
+  });
+});

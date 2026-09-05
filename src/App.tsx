@@ -31,6 +31,7 @@ import {
   deduplicateTasks,
   ensureRecurringTasksForWeek,
   getTaskDate,
+  isIsoDateKey,
   sanitizeBills,
   sanitizeDailyEvents,
   sanitizeTasks,
@@ -62,7 +63,7 @@ const SHEET_SYNC_CONFIG: AppsScriptSyncConfig = {
 };
 
 type ActiveView = "weekly" | "daily" | "staff" | "bills" | "transfer" | "completed" | "archive";
-type DialogState = { open: boolean; day: number; task?: Task | null; generalReminder?: boolean };
+type DialogState = { open: boolean; day: number; task?: Task | null; generalReminder?: boolean; date?: string };
 
 const navItems: Array<{ id: ActiveView; label: string; icon: typeof LayoutGrid }> = [
   { id: "weekly", label: "Weekly", icon: LayoutGrid },
@@ -80,8 +81,27 @@ function initialActiveView(): ActiveView {
   return "daily";
 }
 
+/**
+ * Builds recurring occurrences for the shown week AND the one after it.
+ *
+ * The agenda is a rolling window of today plus seven days, so it always reaches into next
+ * week. ensureRecurringTasksForWeek only ever materialises one week, so generating just the
+ * current one left every day past Sunday looking empty of repeating work -- a worse lie than
+ * the wrap it replaced. Generating a week ahead does mean next week's repeating tasks appear
+ * in the sheet (and the weekly grid) about seven days earlier than they used to.
+ */
+/** ISO weekday (Mon=1..Sun=7) for a date key, matching how tasks store dayOfWeek. */
+function dayOfWeekFromDateKey(dateKey: string): number {
+  const day = dateFromKey(dateKey).getDay();
+  return day === 0 ? 7 : day;
+}
+
 function normalizeTasksForWeek(tasks: Task[], weekId: string): Task[] {
-  return deduplicateTasks(ensureRecurringTasksForWeek(sanitizeTasks(tasks), weekId));
+  const sanitized = sanitizeTasks(tasks);
+  const withCurrentWeek = ensureRecurringTasksForWeek(sanitized, weekId);
+  const nextWeekId = isIsoDateKey(weekId) ? toLocalDateKey(addDays(dateFromKey(weekId), 7)) : "";
+  const withNextWeek = nextWeekId ? ensureRecurringTasksForWeek(withCurrentWeek, nextWeekId) : withCurrentWeek;
+  return deduplicateTasks(withNextWeek);
 }
 
 function sameTasks(left: Task[], right: Task[]): boolean {
@@ -169,6 +189,8 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [dialog, setDialog] = useState<DialogState>({ open: false, day: 1, task: null });
+  // The agenda is a rolling window, so it tracks a date rather than a week.
+  const [agendaAnchor, setAgendaAnchor] = useState(todayStr());
   // Read by the auto-pull interval, which closes over its own scope and cannot see state.
   const dialogOpenRef = useRef(false);
   const [snapshot, setSnapshot] = useState<OperationsSnapshot>(() => loadSnapshot(weekId));
@@ -784,14 +806,19 @@ export default function App() {
 
           {activeView === "daily" ? (
             <DailyAgendaView
-              weekId={weekId}
+              anchorDate={agendaAnchor}
               tasks={openScheduledTasks}
               categories={snapshot.categories}
               staff={snapshot.staff}
               dailyEvents={visibleDailyEvents}
               onDailyNoteChange={changeDailyNote}
-              onWeekChange={setWeekId}
-              onAddTask={(day) => setDialog({ open: true, day, task: null })}
+              onAnchorChange={(dateKey) => {
+                setAgendaAnchor(dateKey);
+                // Keep the rest of the app, which is still week-based, on the window's week
+                // so recurring occurrences are generated for what the agenda is showing.
+                setWeekId(weekIdFromDate(dateFromKey(dateKey)));
+              }}
+              onAddTask={(dateKey) => setDialog({ open: true, day: dayOfWeekFromDateKey(dateKey), task: null, date: dateKey })}
               onToggleTask={toggleTask}
               onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
             />
@@ -838,12 +865,13 @@ export default function App() {
       <TaskDialog
         open={dialog.open}
         task={dialog.task}
+        defaultDate={dialog.date}
         weekId={weekId}
         defaultDay={dialog.day}
         defaultGeneralReminder={Boolean(dialog.generalReminder)}
         categories={snapshot.categories}
         staff={snapshot.staff}
-        onClose={() => setDialog({ open: false, day: dialog.day, task: null, generalReminder: false })}
+        onClose={() => setDialog({ open: false, day: dialog.day, task: null, generalReminder: false, date: undefined })}
         onSave={saveTask}
         onDelete={deleteTask}
       />

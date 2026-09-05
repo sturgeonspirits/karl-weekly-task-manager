@@ -8,6 +8,8 @@ type TaskDialogProps = {
   open: boolean;
   weekId: string;
   defaultDay: number;
+  /** Exact date for a new task, since the agenda window spans more than one week. */
+  defaultDate?: string;
   defaultGeneralReminder?: boolean;
   task?: Task | null;
   categories: CategoryOption[];
@@ -37,7 +39,8 @@ function createForm(
   defaultDay: number,
   categories: CategoryOption[],
   staff: StaffMember[],
-  defaultGeneralReminder = false
+  defaultGeneralReminder = false,
+  defaultDate?: string
 ): TaskForm {
   const isGeneralReminder = task?.source === "staff" ? false : Boolean(task?.isGeneralReminder || defaultGeneralReminder);
   const defaultAssignee = KARL_ASSIGNEE;
@@ -47,7 +50,12 @@ function createForm(
     dayOfWeek: task?.dayOfWeek || defaultDay,
     category: categoryValue(task?.category, categories),
     priority: task?.priority || "medium",
-    scheduledDate: isGeneralReminder ? "" : task?.specificDate || (task?.source === "staff" ? "" : dateKeyForWeekDay(task?.weekId || weekId, task?.dayOfWeek || defaultDay)),
+    // defaultDate wins for a new task: the agenda can add to a day in next week, which
+    // weekId + dayOfWeek cannot express.
+    scheduledDate: isGeneralReminder
+      ? ""
+      : task?.specificDate ||
+        (task ? (task.source === "staff" ? "" : dateKeyForWeekDay(task.weekId || weekId, task.dayOfWeek || defaultDay)) : defaultDate || dateKeyForWeekDay(weekId, defaultDay)),
     assignee: task?.assignee || (task?.source === "staff" ? "" : defaultAssignee),
     shiftHours: task?.shiftHours || "",
     repeatsWeekly: Boolean(task?.repeatsWeekly || (task?.repeatPattern && task.repeatPattern !== "none")),
@@ -68,10 +76,11 @@ function createForm(
 export function taskFormIdentity(
   task: Task | null | undefined,
   defaultDay: number,
-  defaultGeneralReminder: boolean
+  defaultGeneralReminder: boolean,
+  defaultDate?: string
 ): string {
   if (task?.id) return `task:${task.id}`;
-  return `new:${defaultDay}:${defaultGeneralReminder ? "reminder" : "scheduled"}`;
+  return `new:${defaultDate || defaultDay}:${defaultGeneralReminder ? "reminder" : "scheduled"}`;
 }
 
 function dayOfWeekFromDateKey(dateKey: string, fallback: number): number {
@@ -84,6 +93,7 @@ export function TaskDialog({
   open,
   weekId,
   defaultDay,
+  defaultDate,
   defaultGeneralReminder = false,
   task,
   categories,
@@ -93,7 +103,7 @@ export function TaskDialog({
   onDelete,
 }: TaskDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  const [form, setForm] = useState<TaskForm>(() => createForm(task, weekId, defaultDay, categories, staff, defaultGeneralReminder));
+  const [form, setForm] = useState<TaskForm>(() => createForm(task, weekId, defaultDay, categories, staff, defaultGeneralReminder, defaultDate));
   // Which form is currently loaded. Null while closed, so reopening always rebuilds.
   const loadedFormRef = useRef<string | null>(null);
 
@@ -106,14 +116,14 @@ export function TaskDialog({
 
     // Rebuild only when a genuinely different task is opened. Without this guard a sync
     // landing mid-edit wiped the fields, because it hands every prop a new identity.
-    const identity = taskFormIdentity(task, defaultDay, defaultGeneralReminder);
+    const identity = taskFormIdentity(task, defaultDay, defaultGeneralReminder, defaultDate);
     if (loadedFormRef.current !== identity) {
       loadedFormRef.current = identity;
-      setForm(createForm(task, weekId, defaultDay, categories, staff, defaultGeneralReminder));
+      setForm(createForm(task, weekId, defaultDay, categories, staff, defaultGeneralReminder, defaultDate));
     }
 
     if (!dialogRef.current?.open) dialogRef.current?.showModal();
-  }, [categories, defaultDay, defaultGeneralReminder, open, staff, task, weekId]);
+  }, [categories, defaultDate, defaultDay, defaultGeneralReminder, open, staff, task, weekId]);
 
   const isEditing = Boolean(task);
   function update<K extends keyof TaskForm>(key: K, value: TaskForm[K]) {

@@ -1,65 +1,79 @@
 import { CalendarCheck, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, DailyEvents, StaffMember, Task } from "../types";
-import { addDays, compareTasksByPriority, dateFromKey, DAY_NAMES, dateKeyForWeekDay, formatLongDate, formatShortDate, toLocalDateKey, weekDayOrder, weekIdFromDate } from "../utils";
+import { addDays, compareTasksByPriority, dateFromKey, DAY_NAMES, formatLongDate, formatShortDate, rollingAgendaDays, todayStr, toLocalDateKey } from "../utils";
+
+// Today plus the next seven days.
+const AGENDA_DAY_COUNT = 8;
 import { categoryLabel, categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 
 type DailyAgendaViewProps = {
-  weekId: string;
+  anchorDate: string;
   tasks: Task[];
   categories: CategoryOption[];
   staff: StaffMember[];
   dailyEvents: DailyEvents;
   onDailyNoteChange: (key: string, value: string) => void;
-  onWeekChange: (weekId: string) => void;
-  onAddTask: (dayOfWeek: number) => void;
+  onAnchorChange: (dateKey: string) => void;
+  onAddTask: (dateKey: string) => void;
   onToggleTask: (taskId: string) => void;
   onEditTask: (task: Task) => void;
 };
 
 export function DailyAgendaView({
-  weekId,
+  anchorDate,
   tasks,
   categories,
   dailyEvents,
   onDailyNoteChange,
-  onWeekChange,
+  onAnchorChange,
   onAddTask,
   onToggleTask,
   onEditTask,
 }: DailyAgendaViewProps) {
   const todayKey = toLocalDateKey(new Date());
-  const weekDays = useMemo(() => {
-    const days = Array.from({ length: 7 }, (_, index) => ({
-      dayOfWeek: index + 1,
-      dateKey: dateKeyForWeekDay(weekId, index + 1),
-      label: DAY_NAMES[index],
-      isToday: dateKeyForWeekDay(weekId, index + 1) === todayKey,
-    }));
+  const agendaDays = useMemo(() => {
+    // Consecutive real dates from the anchor. Grouping by dayOfWeek within one weekId is what
+    // made the old view wrap back to the start of the same week instead of moving forward.
+    return rollingAgendaDays(anchorDate, AGENDA_DAY_COUNT).map((dateKey) => {
+      const date = dateFromKey(dateKey);
+      const jsDay = date.getDay();
+      return {
+        dateKey,
+        dayOfWeek: jsDay === 0 ? 7 : jsDay,
+        label: DAY_NAMES[(jsDay === 0 ? 7 : jsDay) - 1],
+        isToday: dateKey === todayKey,
+      };
+    });
+  }, [anchorDate, todayKey]);
 
-    const byDayOfWeek = new Map(days.map((day) => [day.dayOfWeek, day]));
-    return weekDayOrder(weekId, todayKey).map((dayOfWeek) => byDayOfWeek.get(dayOfWeek)!);
-  }, [weekId, todayKey]);
-  const tasksByDay = useMemo(() => {
-    const groups = new Map<number, Task[]>();
+  const tasksByDate = useMemo(() => {
+    const groups = new Map<string, Task[]>();
 
     tasks
-      .filter((task) => task.weekId === weekId && !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate))
+      .filter((task) => !task.deleted && !task.isGeneralReminder && Boolean(task.specificDate))
       .slice()
       .sort((a, b) => {
-        if (a.dayOfWeek !== b.dayOfWeek) return a.dayOfWeek - b.dayOfWeek;
+        // Date first, because the window spans more than one week now.
+        if (a.specificDate !== b.specificDate) return (a.specificDate || "").localeCompare(b.specificDate || "");
         return compareTasksByPriority(a, b);
       })
       .forEach((task) => {
-        groups.set(task.dayOfWeek, [...(groups.get(task.dayOfWeek) || []), task]);
+        const key = task.specificDate as string;
+        groups.set(key, [...(groups.get(key) || []), task]);
       });
 
     return groups;
-  }, [tasks, weekId]);
-  const weekTaskCount = useMemo(() => Array.from(tasksByDay.values()).reduce((total, dayTasks) => total + dayTasks.length, 0), [tasksByDay]);
+  }, [tasks]);
 
-  function moveWeek(offset: number) {
-    onWeekChange(toLocalDateKey(addDays(dateFromKey(weekId), offset)));
+  const windowTaskCount = useMemo(
+    () => agendaDays.reduce((total, day) => total + (tasksByDate.get(day.dateKey) || []).length, 0),
+    [agendaDays, tasksByDate]
+  );
+
+  // Shift the window a whole week at a time; "Today" snaps it back to now.
+  function moveWindow(offsetDays: number) {
+    onAnchorChange(toLocalDateKey(addDays(dateFromKey(anchorDate), offsetDays)));
   }
 
   return (
@@ -67,27 +81,29 @@ export function DailyAgendaView({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="eyebrow">Agenda</p>
-          <h2 className="page-title">Week of {formatShortDate(weekId)}</h2>
+          <h2 className="page-title">
+            {formatShortDate(agendaDays[0]?.dateKey || anchorDate)} – {formatShortDate(agendaDays[agendaDays.length - 1]?.dateKey || anchorDate)}
+          </h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button className="btn-secondary" type="button" onClick={() => moveWeek(-7)}>
+          <button className="btn-secondary" type="button" onClick={() => moveWindow(-7)}>
             <ChevronLeft size={17} />
             Previous
           </button>
-          <button className="btn-secondary" type="button" onClick={() => onWeekChange(weekIdFromDate(new Date()))}>
+          <button className="btn-secondary" type="button" onClick={() => onAnchorChange(todayStr())}>
             Today
           </button>
-          <button className="btn-secondary" type="button" onClick={() => moveWeek(7)}>
+          <button className="btn-secondary" type="button" onClick={() => moveWindow(7)}>
             Next
             <ChevronRight size={17} />
           </button>
-          <span className="stat-pill">{weekTaskCount} scheduled tasks</span>
+          <span className="stat-pill">{windowTaskCount} scheduled tasks</span>
         </div>
       </div>
 
       <div className="agenda-week-stack mt-5 grid gap-4">
-        {weekDays.map((day) => {
-          const dayTasks = tasksByDay.get(day.dayOfWeek) || [];
+        {agendaDays.map((day) => {
+          const dayTasks = tasksByDate.get(day.dateKey) || [];
           const note = dailyEvents[day.dateKey] || "";
 
           return (
@@ -102,7 +118,7 @@ export function DailyAgendaView({
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="stat-pill">{dayTasks.length} tasks</span>
-                  <button className="btn-primary" type="button" onClick={() => onAddTask(day.dayOfWeek)}>
+                  <button className="btn-primary" type="button" onClick={() => onAddTask(day.dateKey)}>
                     <Plus size={17} />
                     Add
                   </button>

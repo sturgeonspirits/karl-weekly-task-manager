@@ -443,16 +443,28 @@ export function currency(value: number): string {
 }
 
 
+
+
 /**
- * The order the agenda lists a week's days in: today first, then forward, wrapping the days
- * already gone to the bottom.
+ * The dates the agenda lists: the anchor day followed by the next `count - 1` days.
  *
- * Only the week that actually contains today is rotated. Rotating any other week would put
- * an arbitrary day at the top, which reads as a bug rather than a feature.
+ * A rolling window, not a week. The agenda used to render Monday-to-Sunday of one weekId and
+ * rotate today to the front, which wrapped the days already gone round to the bottom -- so
+ * after Wednesday you saw Thu-Sun then Mon-Tue of the SAME week, never next week. Producing
+ * real consecutive dates removes the wrap entirely.
  */
-export function weekDayOrder(weekId: string, todayKey: string): number[] {
-  const days = [1, 2, 3, 4, 5, 6, 7];
-  const todayIndex = days.findIndex((dayOfWeek) => dateKeyForWeekDay(weekId, dayOfWeek) === todayKey);
-  if (todayIndex <= 0) return days;
-  return [...days.slice(todayIndex), ...days.slice(0, todayIndex)];
+export function rollingAgendaDays(anchorKey: string, count = 8): string[] {
+  if (!isIsoDateKey(anchorKey)) return [];
+  const start = dateFromKey(anchorKey);
+  return Array.from({ length: Math.max(count, 1) }, (_, offset) => toLocalDateKey(addDays(start, offset)));
+}
+
+/** The distinct week ids a rolling window touches — what recurring tasks must be built for. */
+export function weekIdsForAgendaWindow(anchorKey: string, count = 8): string[] {
+  const seen: string[] = [];
+  rollingAgendaDays(anchorKey, count).forEach((dateKey) => {
+    const weekId = weekIdFromDate(dateFromKey(dateKey));
+    if (!seen.includes(weekId)) seen.push(weekId);
+  });
+  return seen;
 }
