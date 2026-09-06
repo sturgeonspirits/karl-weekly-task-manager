@@ -18,6 +18,11 @@ export default defineConfig({
 
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,ico,webmanifest}"],
+
+        // The icon and manifest links in index.html carry a ?v= cache-busting query.
+        // Without this the precached copies never match those requests and every icon
+        // load goes to the network -- through the basic-auth edge function.
+        ignoreURLParametersMatching: [/^v$/, /^utm_/, /^fbclid$/],
         clientsClaim: true,
         skipWaiting: true,
 
