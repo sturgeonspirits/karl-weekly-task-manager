@@ -240,6 +240,11 @@ export default function App() {
     snapshotRef.current = snapshot;
   }, [snapshot]);
 
+  // Bumped synchronously by every local edit (see markLocalEdit). snapshotRef above only
+  // catches up after React commits, so a tap made just before a pull resolves would be
+  // invisible to a snapshot comparison; this counter is not.
+  const localEditRevisionRef = useRef(0);
+
   useEffect(() => {
     dialogOpenRef.current = dialog.open;
   }, [dialog.open]);
@@ -291,15 +296,22 @@ export default function App() {
    * same tick (a rapid double toggle, a save while an autosync is applying) can no longer
    * clobber each other.
    */
+  function markLocalEdit() {
+    localEditRevisionRef.current += 1;
+  }
+
   function updateTasks(updater: (tasks: Task[]) => Task[]) {
+    markLocalEdit();
     setSnapshot((current) => ({ ...current, tasks: normalizeTasksForWeek(updater(current.tasks), weekId) }));
   }
 
   function setBills(bills: Bill[]) {
+    markLocalEdit();
     setSnapshot((current) => ({ ...current, bills: sanitizeBills(bills) }));
   }
 
   function setStaff(staff: StaffMember[]) {
+    markLocalEdit();
     setSnapshot((current) => ({ ...current, staff }));
   }
 
@@ -368,6 +380,7 @@ export default function App() {
   }
 
   function changeDailyNote(key: string, value: string) {
+    markLocalEdit();
     setSnapshot((current) => {
       const dailyEvents: DailyEvents = { ...current.dailyEvents };
       if (value.trim()) dailyEvents[key] = value;
@@ -460,6 +473,7 @@ export default function App() {
   const pullSheets = useCallback(async (silent = false) => {
     const pendingSnapshot = snapshotRef.current;
     const pendingSnapshotJson = JSON.stringify(pendingSnapshot);
+    const editRevisionAtStart = localEditRevisionRef.current;
     if (hasAnySyncedData(pendingSnapshot) && lastSavedSnapshotJsonRef.current !== pendingSnapshotJson) {
       if (!silent) setSyncStatus("Local changes are waiting to sync before the next refresh.");
       return;
@@ -469,16 +483,17 @@ export default function App() {
     if (!silent) setSyncStatus("Refreshing from Google Sheets...");
     try {
       const { brief: pulledBrief, ...pulledSnapshot } = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshotRef.current);
-      // The brief is read-only, so it is safe to show even when the rest of this pull is dropped.
-      if (pulledBrief) {
-        setBrief(pulledBrief);
-        writeLocalStorageValue(BRIEF_STORAGE_KEY, JSON.stringify(pulledBrief));
-      }
+      // The brief is read-only, so it is safe to apply even when the rest of this pull is
+      // dropped. A successful pull without one (tab cleared or unreadable) clears the cache,
+      // so an old copy is never left on screen.
+      setBrief(pulledBrief);
+      if (pulledBrief) writeLocalStorageValue(BRIEF_STORAGE_KEY, JSON.stringify(pulledBrief));
+      else removeLocalStorageValue(BRIEF_STORAGE_KEY);
       // A pull takes a few seconds on a phone (two requests). If anything changed locally while
       // it was in flight -- a box ticked, a task edited -- applying the pulled copy would wipe
       // that change, which is why a tick sometimes needed a second tap. Drop this pull instead;
       // the queued autosave writes the change and the next refresh brings the rest.
-      if (JSON.stringify(snapshotRef.current) !== pendingSnapshotJson) {
+      if (localEditRevisionRef.current !== editRevisionAtStart || JSON.stringify(snapshotRef.current) !== pendingSnapshotJson) {
         if (!silent) setSyncStatus("Local changes are waiting to sync before the next refresh.");
         return;
       }

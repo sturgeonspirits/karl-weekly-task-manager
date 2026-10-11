@@ -21,6 +21,8 @@
  * Version:
  * - KWTM_SCRIPT_VERSION 2026-10-11.10
  * - KWTM_SCRIPT_UPDATED_AT 2026-10-11
+ * - Changes in this version: the private pull also returns the read-only "Brief" tab that
+ *   the Sturgeon Secretary writes each morning. No write path touches it; no new services.
  * - Open the deployed web app URL in a browser to confirm the live script version.
  *
  * Invariant: no code path may throw out of doPost. Apps Script answers an uncaught error
