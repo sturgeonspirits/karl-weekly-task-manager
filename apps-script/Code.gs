@@ -366,6 +366,9 @@ function KWTM_readPrivateWorkbook_(config) {
     categories: KWTM_readRows_(ss, KWTM_pickTab_(tabs, ["Categories"])),
     bills: KWTM_readRows_(ss, KWTM_pickTab_(tabs, ["Bills", "Expenses"])),
     staff: KWTM_readRows_(ss, KWTM_pickTab_(tabs, ["Staff", "Staff Members"])),
+    // Written each morning by the Sturgeon Secretary script. Read-only here: no save path
+    // ever writes this tab.
+    brief: KWTM_readRows_(ss, KWTM_pickTab_(tabs, ["Brief"])),
   };
 }
 

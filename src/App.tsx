@@ -4,6 +4,7 @@ import { BillsView } from "./components/BillsView";
 import { ArchiveView } from "./components/ArchiveView";
 import { CompletedTasksView } from "./components/CompletedTasksView";
 import { DailyAgendaView } from "./components/DailyAgendaView";
+import { DailyBriefCard } from "./components/DailyBriefCard";
 import { GeneralRemindersPanel } from "./components/GeneralRemindersPanel";
 import { StaffSchedulerView } from "./components/StaffSchedulerView";
 import { TaskDialog } from "./components/TaskDialog";
@@ -22,7 +23,7 @@ import {
   type AppsScriptSyncConfig,
   type ArchivedTask,
 } from "./lib/sheetsService";
-import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "./types";
+import type { Bill, CategoryOption, DailyBrief, DailyEvents, OperationsSnapshot, StaffMember, Task } from "./types";
 import {
   addDays,
   billRemaining,
@@ -40,7 +41,7 @@ import {
   weekIdFromDate,
 } from "./utils";
 import { isKarlAssignee } from "./lib/ui";
-import { LAST_SYNCED_STORAGE_KEY, STORAGE_KEY } from "./lib/storage";
+import { BRIEF_STORAGE_KEY, LAST_SYNCED_STORAGE_KEY, STORAGE_KEY } from "./lib/storage";
 import { hasAnySyncedData, hasPrivateOperationsData, isPrivateTask, isStaffTask } from "./lib/taskPredicates";
 
 
@@ -155,6 +156,15 @@ function loadSnapshot(weekId: string): OperationsSnapshot {
   }
 }
 
+function readCachedBrief(): DailyBrief | null {
+  try {
+    const parsed = JSON.parse(readLocalStorageValue(BRIEF_STORAGE_KEY) || "null");
+    return parsed && typeof parsed.date === "string" && Array.isArray(parsed.sections) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function readLocalStorageValue(key: string): string {
   try {
     return localStorage.getItem(key) || "";
@@ -184,6 +194,8 @@ export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>(initialActiveView);
   // Fetched on demand when the Archive view is opened, never as part of a sync.
   const [archiveTasks, setArchiveTasks] = useState<ArchivedTask[]>([]);
+  // The secretary's morning brief. Separate from the snapshot so it never counts as a change.
+  const [brief, setBrief] = useState<DailyBrief | null>(readCachedBrief);
   const [archiveStatus, setArchiveStatus] = useState<"idle" | "loading" | "ready" | "error" | "unconfigured">("idle");
   const [archiveError, setArchiveError] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
@@ -456,7 +468,12 @@ export default function App() {
     beginSync();
     if (!silent) setSyncStatus("Refreshing from Google Sheets...");
     try {
-      const pulledSnapshot = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshotRef.current);
+      const { brief: pulledBrief, ...pulledSnapshot } = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshotRef.current);
+      // The brief is read-only, so it is safe to show even when the rest of this pull is dropped.
+      if (pulledBrief) {
+        setBrief(pulledBrief);
+        writeLocalStorageValue(BRIEF_STORAGE_KEY, JSON.stringify(pulledBrief));
+      }
       // A pull takes a few seconds on a phone (two requests). If anything changed locally while
       // it was in flight -- a box ticked, a task edited -- applying the pulled copy would wipe
       // that change, which is why a tick sometimes needed a second tap. Drop this pull instead;
@@ -767,6 +784,7 @@ export default function App() {
       </header>
 
       <main className="app-main mx-auto grid max-w-[1500px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
+        <DailyBriefCard brief={brief} today={todayStr()} />
         <section className="ops-overview app-support-panel" aria-label="Week summary">
           <div>
             <span>Tasks</span>

@@ -1,4 +1,4 @@
-import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task } from "../types";
+import type { Bill, CategoryOption, DailyEvents, OperationsSnapshot, StaffMember, Task, DailyBrief } from "../types";
 import {
   dateKeyForWeekDay,
   deduplicateTasks,
@@ -94,6 +94,7 @@ type AppsScriptRows = {
   bills?: string[][];
   staff?: string[][];
   todos?: string[][];
+  brief?: string[][];
 };
 
 type AppsScriptPullResponse = {
@@ -553,10 +554,37 @@ function mergeStaffLists(primary: StaffMember[], secondary: StaffMember[]): Staf
  * requests means two budgets. They run in sequence rather than in parallel so a refresh
  * never has two executions of this script in flight at once.
  */
+/**
+ * Reads the Brief tab: rows of [Section, Text, Source] under a header row. "Date" and
+ * "Updated" rows are metadata; every other row is a line under its section, in sheet order.
+ * Returns null when there is no tab or no date.
+ */
+export function parseBrief(rows: string[][] | undefined): DailyBrief | null {
+  if (!rows || rows.length < 2) return null;
+  let date = "";
+  let updated = "";
+  const sections: DailyBrief["sections"] = [];
+  rows.slice(1).forEach((row) => {
+    const title = String(row[0] || "").trim();
+    const text = String(row[1] || "").trim();
+    if (!title || !text) return;
+    if (title === "Date") date = text;
+    else if (title === "Updated") updated = text;
+    else {
+      const section = sections.find((item) => item.title === title);
+      if (section) section.lines.push(text);
+      else sections.push({ title, lines: [text] });
+    }
+  });
+  return isIsoDateKey(date) ? { date, updated, sections } : null;
+}
+
+export type PulledSnapshot = OperationsSnapshot & { brief: DailyBrief | null };
+
 export async function pullAppsScriptSnapshot(
   config: AppsScriptSyncConfig,
   fallback: OperationsSnapshot
-): Promise<OperationsSnapshot> {
+): Promise<PulledSnapshot> {
   const privateData = await syncFunctionFetch<AppsScriptPullResponse>("pull", { config, scope: "private" });
   const staffData = await syncFunctionFetch<AppsScriptPullResponse>("pull", { config, scope: "staff" });
   const privateRows = privateData.private || {};
@@ -588,6 +616,7 @@ export async function pullAppsScriptSnapshot(
     dailyEvents: privateSnapshot.dailyEvents,
     staffDailyEvents: staffSnapshot.dailyEvents,
     staff: mergeStaffLists(privateSnapshot.staff, staffSnapshot.staff),
+    brief: parseBrief(privateRows.brief),
   };
 }
 

@@ -66,6 +66,17 @@ export interface StaffMember {
 
 export type DailyEvents = Record<string, string>;
 
+/**
+ * The morning brief from the Sturgeon Secretary. Kept apart from OperationsSnapshot on
+ * purpose: it is read-only, never saved back, and must never make the app think it has
+ * unsaved changes.
+ */
+export interface DailyBrief {
+  date: string;
+  updated: string;
+  sections: { title: string; lines: string[] }[];
+}
+
 export interface OperationsSnapshot {
   tasks: Task[];
   categories: CategoryOption[];

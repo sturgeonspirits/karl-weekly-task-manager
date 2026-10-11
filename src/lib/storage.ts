@@ -6,3 +6,4 @@ export function clearCachedSnapshot(): void {
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(LAST_SYNCED_STORAGE_KEY);
 }
+export const BRIEF_STORAGE_KEY = "kwtm-daily-brief";

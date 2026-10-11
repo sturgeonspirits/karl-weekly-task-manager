@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeDailyEventSets, parseBills, parseTasks } from "./sheetsService";
+import { mergeDailyEventSets, parseBills, parseBrief, parseTasks } from "./sheetsService";
 import { BILL_COLUMNS, LEGACY_BILL_COLUMNS, TASK_COLUMNS } from "./sheetSchema";
 
 describe("mergeDailyEventSets", () => {
@@ -212,5 +212,42 @@ describe("parseBills", () => {
     const row = ["b-3", "Mystery charge", "", "50", "not-a-date", "", "", "upcoming", "", "", "", "1700", "FALSE"];
 
     expect(parseBills([[...BILL_COLUMNS], row])).toEqual([]);
+  });
+});
+
+describe("parseBrief", () => {
+  const header = ["Section", "Text", "Source"];
+
+  it("groups lines under their sections in sheet order and keeps the metadata apart", () => {
+    const brief = parseBrief([
+      header,
+      ["Date", "2026-10-12", "script"],
+      ["Updated", "4:05 AM", "script"],
+      ["Today", "9:00 AM Mash", "script"],
+      ["Needs you", "Lauren Hearn: bridal shower Feb 27", "script"],
+      ["Today", "6:00 PM Cribbage", "script"],
+      ["Website enquiries", "Pat Smith: tour for 12 on Saturday", "review"],
+    ]);
+    expect(brief).toEqual({
+      date: "2026-10-12",
+      updated: "4:05 AM",
+      sections: [
+        { title: "Today", lines: ["9:00 AM Mash", "6:00 PM Cribbage"] },
+        { title: "Needs you", lines: ["Lauren Hearn: bridal shower Feb 27"] },
+        { title: "Website enquiries", lines: ["Pat Smith: tour for 12 on Saturday"] },
+      ],
+    });
+  });
+
+  it("returns null for a missing tab, an empty tab or a brief with no valid date", () => {
+    expect(parseBrief(undefined)).toBeNull();
+    expect(parseBrief([header])).toBeNull();
+    expect(parseBrief([header, ["Today", "9:00 AM Mash", "script"]])).toBeNull();
+    expect(parseBrief([header, ["Date", "Oct 12", "script"]])).toBeNull();
+  });
+
+  it("skips blank rows", () => {
+    const brief = parseBrief([header, ["Date", "2026-10-12", ""], ["", "", ""], ["Needs you", "", ""]]);
+    expect(brief?.sections).toEqual([]);
   });
 });
