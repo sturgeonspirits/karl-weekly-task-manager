@@ -1,5 +1,5 @@
-// KWTM_SCRIPT_VERSION: 2026-09-02.9
-// KWTM_SCRIPT_UPDATED_AT: 2026-09-02
+// KWTM_SCRIPT_VERSION: 2026-10-11.10
+// KWTM_SCRIPT_UPDATED_AT: 2026-10-11
 // Purpose: Karl Weekly Task Manager sync bridge for Google Sheets.
 
 /*
@@ -19,8 +19,8 @@
  * - KWTM_PUBLIC_STAFF_SHEET_ID: optional; when absent, public staff publishing is skipped
  *
  * Version:
- * - KWTM_SCRIPT_VERSION 2026-09-02.9
- * - KWTM_SCRIPT_UPDATED_AT 2026-09-02
+ * - KWTM_SCRIPT_VERSION 2026-10-11.10
+ * - KWTM_SCRIPT_UPDATED_AT 2026-10-11
  * - Open the deployed web app URL in a browser to confirm the live script version.
  *
  * Invariant: no code path may throw out of doPost. Apps Script answers an uncaught error
@@ -29,8 +29,8 @@
  * transient hiccup and for a real, fixable fault. Every entry point ends in KWTM_json_.
  */
 
-var KWTM_SCRIPT_VERSION = "2026-09-02.9";
-var KWTM_SCRIPT_UPDATED_AT = "2026-09-02";
+var KWTM_SCRIPT_VERSION = "2026-10-11.10";
+var KWTM_SCRIPT_UPDATED_AT = "2026-10-11";
 
 // How long to wait for the script lock before telling the caller to come back. Kept short
 // on purpose -- see KWTM_tryLock_ for why a long wait actively makes things worse.
