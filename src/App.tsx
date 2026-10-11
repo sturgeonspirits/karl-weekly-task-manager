@@ -457,6 +457,14 @@ export default function App() {
     if (!silent) setSyncStatus("Refreshing from Google Sheets...");
     try {
       const pulledSnapshot = await pullAppsScriptSnapshot(SHEET_SYNC_CONFIG, snapshotRef.current);
+      // A pull takes a few seconds on a phone (two requests). If anything changed locally while
+      // it was in flight -- a box ticked, a task edited -- applying the pulled copy would wipe
+      // that change, which is why a tick sometimes needed a second tap. Drop this pull instead;
+      // the queued autosave writes the change and the next refresh brings the rest.
+      if (JSON.stringify(snapshotRef.current) !== pendingSnapshotJson) {
+        if (!silent) setSyncStatus("Local changes are waiting to sync before the next refresh.");
+        return;
+      }
       const nextSnapshot = { ...pulledSnapshot, tasks: normalizeTasksForWeek(pulledSnapshot.tasks, weekId) };
       const pulledJson = JSON.stringify(nextSnapshot);
       const needsSheetRepair = nextSnapshot.tasks.some((task) => task.needsSheetRepair);
@@ -674,7 +682,14 @@ export default function App() {
       if (document.visibilityState !== "visible" || isSyncInFlight()) return;
       const current = snapshotRef.current;
       const currentJson = JSON.stringify(current);
-      if (lastSavedSnapshotJsonRef.current === currentJson) return;
+      if (lastSavedSnapshotJsonRef.current === currentJson) {
+        // Nothing waiting to save: coming back to the app is when stale tasks show, so refresh
+        // now rather than up to a minute later. Never under an open editor.
+        if (syncReadyRef.current && !dialogOpenRef.current && !autoSaveTimerRef.current && !retrySaveTimerRef.current) {
+          void pullSheets(true);
+        }
+        return;
+      }
       if (!hasAnySyncedData(current)) return;
       syncReadyRef.current = true;
       if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
@@ -695,7 +710,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", retryPendingSave);
       window.removeEventListener("focus", retryPendingSave);
     };
-  }, [autoSaveSnapshot, isSyncInFlight]);
+  }, [autoSaveSnapshot, isSyncInFlight, pullSheets]);
 
   useEffect(
     () => () => {
