@@ -800,35 +800,6 @@ export default function App() {
 
       <main className="app-main mx-auto grid max-w-[1500px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
         <DailyBriefCard brief={brief} today={todayStr()} />
-        <section className="ops-overview app-support-panel" aria-label="Week summary">
-          <div>
-            <span>Tasks</span>
-            <strong>{completed}/{activeWeekTasks.length}</strong>
-          </div>
-          <div>
-            <span>High Priority Open</span>
-            <strong>{highPriority}</strong>
-          </div>
-          <div>
-            <span>Assigned Shifts</span>
-            <strong>{assigned}</strong>
-          </div>
-          <div>
-            <span>Outstanding Bills</span>
-            <strong>${Math.round(outstandingBills).toLocaleString()}</strong>
-          </div>
-        </section>
-
-        <div className="app-support-panel">
-          <GeneralRemindersPanel
-            tasks={generalReminderTasks}
-            categories={snapshot.categories}
-            onAddReminder={() => setDialog({ open: true, day: 1, task: null, generalReminder: true })}
-            onToggleTask={toggleTask}
-            onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
-          />
-        </div>
-
         <div className="app-primary-panel">
           {activeView === "weekly" ? (
             <WeeklyGrid
@@ -906,6 +877,35 @@ export default function App() {
               onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
             />
           ) : null}
+        </div>
+
+        <section className="ops-overview app-support-panel" aria-label="Week summary">
+          <div>
+            <span>Tasks</span>
+            <strong>{completed}/{activeWeekTasks.length}</strong>
+          </div>
+          <div>
+            <span>High Priority Open</span>
+            <strong>{highPriority}</strong>
+          </div>
+          <div>
+            <span>Assigned Shifts</span>
+            <strong>{assigned}</strong>
+          </div>
+          <div>
+            <span>Outstanding Bills</span>
+            <strong>${Math.round(outstandingBills).toLocaleString()}</strong>
+          </div>
+        </section>
+
+        <div className="app-support-panel">
+          <GeneralRemindersPanel
+            tasks={generalReminderTasks}
+            categories={snapshot.categories}
+            onAddReminder={() => setDialog({ open: true, day: 1, task: null, generalReminder: true })}
+            onToggleTask={toggleTask}
+            onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
+          />
         </div>
 
       </main>

@@ -215,14 +215,6 @@
     min-width: 0;
   }
 
-  .app-support-panel {
-    order: 1;
-  }
-
-  .app-primary-panel {
-    order: 2;
-  }
-
   .page-title {
     font-size: 1.25rem;
     line-height: 1.2;
@@ -721,14 +713,6 @@
 }
 
 @media (max-width: 760px) {
-  .app-primary-panel {
-    order: 1;
-  }
-
-  .app-support-panel {
-    order: 2;
-  }
-
   .content-surface {
     padding: 0.85rem;
   }
