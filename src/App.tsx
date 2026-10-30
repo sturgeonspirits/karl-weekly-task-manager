@@ -14,12 +14,15 @@ import { seedCategories } from "./data/seedData";
 import {
   DEFAULT_PRIVATE_SHEET_ID,
   DEFAULT_STAFF_TODOS_SHEET_ID,
+  goToSignIn,
+  isSignInRequired,
   mergeDailyEventSets,
   pullAppsScriptSnapshot,
   pullAppsScriptArchive,
   pushAppsScriptOperations,
   pushAppsScriptStaffSchedule,
   pushAppsScriptStaffTodos,
+  signInUrl,
   type AppsScriptSyncConfig,
   type ArchivedTask,
 } from "./lib/sheetsService";
@@ -211,6 +214,11 @@ export default function App() {
   // Kept separate from syncStatus so a failure is not silently painted over by the next
   // "Autosave queued...". It clears only when a sync actually succeeds.
   const [syncError, setSyncError] = useState("");
+  // Signed out of the site: the error banner then carries a "Sign in" link.
+  const [signedOut, setSignedOut] = useState(false);
+  useEffect(() => {
+    if (!syncError) setSignedOut(false);
+  }, [syncError]);
   const autoPullStartedRef = useRef(false);
   const autoSaveTimerRef = useRef<number | null>(null);
   const retrySaveTimerRef = useRef<number | null>(null);
@@ -470,6 +478,16 @@ export default function App() {
     setSyncBusy(false);
   }, []);
 
+  // Unsaved changes are safe across the trip: they sit in this browser, and on the way back
+  // the app saves them before it pulls anything. Only an open editor holds us here, since
+  // whatever is typed in it has not reached the browser copy yet.
+  const handleSignedOut = useCallback(() => {
+    setSyncStatus("");
+    setSignedOut(true);
+    setSyncError("You're signed out. Changes are kept in this browser and will save once you sign in.");
+    if (!dialogOpenRef.current) goToSignIn();
+  }, []);
+
   const pullSheets = useCallback(async (silent = false) => {
     const pendingSnapshot = snapshotRef.current;
     const pendingSnapshotJson = JSON.stringify(pendingSnapshot);
@@ -509,12 +527,16 @@ export default function App() {
       setSyncStatus(needsSheetRepair ? "Sheets refreshed; cleanup queued." : silent ? "Autosync refreshed from Sheets." : "Sheets refreshed.");
       setSyncError("");
     } catch (error) {
+      if (isSignInRequired(error)) {
+        handleSignedOut();
+        return;
+      }
       setSyncStatus("");
       setSyncError(`Could not refresh from Sheets: ${error instanceof Error ? error.message : "unknown error"}`);
     } finally {
       endSync();
     }
-  }, [weekId, beginSync, endSync, isSyncInFlight]);
+  }, [weekId, beginSync, endSync, isSyncInFlight, handleSignedOut]);
 
   const autoSaveSnapshot = useCallback(async (snapshotToSave: OperationsSnapshot, snapshotJson: string) => {
     if (isSyncInFlight()) {
@@ -562,6 +584,11 @@ export default function App() {
       setSyncStatus("Autosaved to Sheets.");
       setSyncError("");
     } catch (error) {
+      if (isSignInRequired(error)) {
+        // No retry timer: every retry would be refused until you sign in.
+        handleSignedOut();
+        return;
+      }
       setSyncStatus("");
       setSyncError(
         `Not saved to Sheets: ${error instanceof Error ? error.message : "unknown error"}. Your changes are still in this browser and will retry automatically.`
@@ -582,7 +609,7 @@ export default function App() {
       if (autoSaveTimerRef.current === ownedTimerId) autoSaveTimerRef.current = null;
       endSync();
     }
-  }, [weekId, beginSync, endSync, isSyncInFlight]);
+  }, [weekId, beginSync, endSync, isSyncInFlight, handleSignedOut]);
 
   const loadArchive = useCallback(async () => {
     setArchiveStatus("loading");
@@ -774,6 +801,14 @@ export default function App() {
           {syncError ? (
             <p className="header-sync-error" role="alert">
               {syncError}
+              {signedOut ? (
+                <>
+                  {" "}
+                  <a className="header-sync-signin" href={signInUrl()}>
+                    Sign in
+                  </a>
+                </>
+              ) : null}
             </p>
           ) : syncStatus ? (
             <p className="header-sync-status">{syncStatus}</p>

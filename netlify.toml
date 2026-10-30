@@ -3,7 +3,7 @@
   publish = "dist"
 
 [[edge_functions]]
-  function = "basic-auth"
+  function = "site-auth"
   path = "/*"
 
 [[redirects]]

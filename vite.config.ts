@@ -21,7 +21,7 @@ export default defineConfig({
 
         // The icon and manifest links in index.html carry a ?v= cache-busting query.
         // Without this the precached copies never match those requests and every icon
-        // load goes to the network -- through the basic-auth edge function.
+        // load goes to the network -- through the site-auth edge function.
         ignoreURLParametersMatching: [/^v$/, /^utm_/, /^fbclid$/],
         clientsClaim: true,
         skipWaiting: true,
@@ -30,8 +30,9 @@ export default defineConfig({
         navigateFallback: "/index.html",
         // ...but never for the sync endpoint. Returning cached HTML there would hand the
         // client an HTML body where it expects JSON, surfacing as a confusing parse error
-        // instead of an honest network failure.
-        navigateFallbackDenylist: [/^\/\.netlify\//],
+        // instead of an honest network failure. Nor for /auth/: the sign-in pages are served
+        // by the edge function, and the cached app in their place would loop.
+        navigateFallbackDenylist: [/^\/\.netlify\//, /^\/auth\//],
 
         runtimeCaching: [
           {

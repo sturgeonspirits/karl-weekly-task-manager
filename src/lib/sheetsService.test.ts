@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { mergeDailyEventSets, parseBills, parseBrief, parseTasks } from "./sheetsService";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  isSignInRequired,
+  mergeDailyEventSets,
+  parseBills,
+  parseBrief,
+  parseTasks,
+  pullAppsScriptArchive,
+} from "./sheetsService";
 import { BILL_COLUMNS, LEGACY_BILL_COLUMNS, TASK_COLUMNS } from "./sheetSchema";
 
 describe("mergeDailyEventSets", () => {
@@ -249,5 +256,42 @@ describe("parseBrief", () => {
   it("skips blank rows", () => {
     const brief = parseBrief([header, ["Date", "2026-10-12", ""], ["", "", ""], ["Needs you", "", ""]]);
     expect(brief?.sections).toEqual([]);
+  });
+});
+
+describe("signed-out sync", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reports a 401 from the sign-in gate as signed out, without retrying", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: false, authRequired: true }), { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+      location: { hostname: "tasks.example", pathname: "/", search: "" },
+    });
+
+    const error = await pullAppsScriptArchive({ privateSheetId: "p", staffTodosSheetId: "s", publicStaffSheetId: "" }).catch(
+      (caught: unknown) => caught
+    );
+    expect(isSignInRequired(error)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat an ordinary sync failure as signed out", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: false, error: "boom" }), { status: 502 })));
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+      location: { hostname: "tasks.example", pathname: "/", search: "" },
+    });
+
+    const error = await pullAppsScriptArchive({ privateSheetId: "p", staffTodosSheetId: "s", publicStaffSheetId: "" }).catch(
+      (caught: unknown) => caught
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(isSignInRequired(error)).toBe(false);
   });
 });

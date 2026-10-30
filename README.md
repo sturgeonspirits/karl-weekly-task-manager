@@ -29,18 +29,27 @@ Connect this repository in Netlify and use:
 
 ### Private site access
 
-This app uses a Netlify Edge Function for HTTP Basic Auth. In Netlify, add these environment variables with the `Functions` scope before deploying:
+The whole site sits behind a Netlify Edge Function (`netlify/edge-functions/site-auth.ts`). You sign in with a 6-digit code emailed to you; there is no password to remember.
 
-- `APP_BASIC_AUTH_USER`
-- `APP_BASIC_AUTH_PASSWORD`
+The code is sent and checked by a small, separate Apps Script project, `apps-script/LoginMailer.gs` ("KWTM Login Mailer"). It is deliberately not part of the sync script: sending mail needs a new Google permission, and adding one to `apps-script/Code.gs` breaks every save until that script is re-authorized. Setup steps are at the top of `LoginMailer.gs`.
 
-Do not add the password to this repository. If either variable is missing, the deployed site returns `503 Site access is not configured.`
+Netlify environment variables:
 
-Optional:
+- `LOGIN_MAILER_URL`: the mailer's web app URL (ends in `/exec`).
+- `LOGIN_MAILER_TOKEN`: a long random string. Same value as the mailer's `KWTM_LOGIN_TOKEN` script property.
+- `APP_SESSION_SECRET` (optional): signing key for the session cookie. Changing it signs every device out. When absent, the key is derived from `APP_BASIC_AUTH_PASSWORD`, or from `LOGIN_MAILER_TOKEN` if there is no password.
+- `APP_BASIC_AUTH_USER` / `APP_BASIC_AUTH_PASSWORD` (optional): the old password, kept as a fallback. When set, the sign-in page shows "Use password instead", so a mailer outage cannot lock you out.
 
-- `APP_SESSION_SECRET`: signing key for the session cookie. The cookie stores an HMAC of the username and an expiry, never the password. When this variable is absent the key is derived from `APP_BASIC_AUTH_PASSWORD` instead, so the site works without it. Setting it is preferable because changing it revokes every existing session without having to change the password.
+At least one way in (mailer or password) must be configured, or the site returns `503 Site access is not configured.`
 
-Sessions last 30 days. Changing the password or `APP_SESSION_SECRET` invalidates existing cookies, so everyone signs in once more.
+How it behaves:
+
+- Codes expire after 10 minutes, work once, and die after 5 wrong tries. The mailer also caps codes at 10 an hour and wrong guesses at 30 a day.
+- Sessions last 90 days and renew themselves on any visit more than a day after the last renewal, so you are only signed out after 90 days of not opening the app.
+- The cookie is `SameSite=Lax`, so opening the site from a link in another app keeps you signed in.
+- The service worker, manifest and icons are served without sign-in. They hold no task data, and it lets the installed app keep its icon and update itself while signed out.
+- When the installed app opens from its cache while signed out, the first refused sync sends it to the sign-in page. Unsaved changes stay in the browser and are saved on the way back.
+- `/auth/logout` signs the current device out.
 
 ### Google Sheets autosync
 

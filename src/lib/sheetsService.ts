@@ -62,16 +62,66 @@ type SyncErrorBody = {
 /** Carries the function's `retryable` flag and upstream detail through to the retry loop. */
 export class SheetSyncError extends Error {
   readonly retryable: boolean;
+  readonly authRequired: boolean;
   readonly upstreamStatus?: number;
   readonly upstreamSnippet?: string;
 
-  constructor(message: string, options: { retryable?: boolean; upstreamStatus?: number; upstreamSnippet?: string } = {}) {
+  constructor(
+    message: string,
+    options: { retryable?: boolean; authRequired?: boolean; upstreamStatus?: number; upstreamSnippet?: string } = {}
+  ) {
     super(message);
     this.name = "SheetSyncError";
     this.retryable = Boolean(options.retryable);
+    this.authRequired = Boolean(options.authRequired);
     this.upstreamStatus = options.upstreamStatus;
     this.upstreamSnippet = options.upstreamSnippet;
   }
+}
+
+/** True when the site's sign-in cookie has run out and the sync was refused for that. */
+export function isSignInRequired(error: unknown): boolean {
+  return error instanceof SheetSyncError && error.authRequired;
+}
+
+/** The emailed-code sign-in page, set to come back to the current view afterwards. */
+export function signInUrl(): string {
+  const here = `${window.location.pathname}${window.location.search}`;
+  const next = here.startsWith("/auth/") ? "/" : here;
+  return next === "/" ? "/auth/login" : `/auth/login?next=${encodeURIComponent(next)}`;
+}
+
+const SIGN_IN_REDIRECT_KEY = "kwtm-sign-in-redirect-at";
+
+/**
+ * Leaves the app for the sign-in page. The installed app opens from its service-worker
+ * cache without touching the network, so being signed out only shows up as a refused sync;
+ * this is what turns that into the sign-in page. Returns false when it declined to
+ * navigate, so the caller leaves a "Sign in" link on screen instead.
+ */
+export function goToSignIn(): boolean {
+  try {
+    // Never bounce back and forth: one automatic trip per 15 seconds at most.
+    const last = Number(window.sessionStorage.getItem(SIGN_IN_REDIRECT_KEY) || 0);
+    if (Date.now() - last < 15_000) return false;
+    window.sessionStorage.setItem(SIGN_IN_REDIRECT_KEY, String(Date.now()));
+  } catch {
+    // Storage blocked: still go.
+  }
+
+  if (window.location.pathname.startsWith("/auth/")) {
+    // We are the app, but the address is the sign-in page: an older service worker answered
+    // it from cache. Remove that worker so the reload reaches the real sign-in page.
+    const registrations = navigator.serviceWorker?.getRegistrations?.() ?? Promise.resolve([]);
+    void registrations
+      .then((list) => Promise.all(list.map((registration) => registration.unregister())))
+      .catch(() => undefined)
+      .finally(() => window.location.reload());
+    return true;
+  }
+
+  window.location.assign(signInUrl());
+  return true;
 }
 
 function delay(ms: number): Promise<void> {
@@ -475,6 +525,11 @@ async function syncFunctionFetchOnce<T>(action: string, payload: Record<string, 
     throw error;
   } finally {
     window.clearTimeout(timeoutId);
+  }
+
+  // The site's sign-in gate answered, not the sync function: the session has run out.
+  if (response.status === 401) {
+    throw new SheetSyncError("You're signed out.", { authRequired: true });
   }
 
   let data: SyncErrorBody;
