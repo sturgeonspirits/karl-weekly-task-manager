@@ -57,7 +57,10 @@ export function DailyBriefCard({ brief, today }: DailyBriefCardProps) {
       </button>
       {!collapsed && (
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          {brief.sections.map((section) => (
+          {brief.sections
+            // The Do first list is shown, live, in its own panel at the top of the page.
+            .filter((section) => section.title.trim().toLowerCase() !== "do first")
+            .map((section) => (
             <div key={section.title}>
               <h3 className="text-sm font-semibold text-ink">{section.title}</h3>
               <ul className="mt-1 space-y-1 text-sm leading-6 text-[#7E613F]">

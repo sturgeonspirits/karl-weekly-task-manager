@@ -1,11 +1,12 @@
 import { CalendarCheck, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, DailyEvents, StaffMember, Task } from "../types";
-import { addDays, compareTasksByPriority, dateFromKey, DAY_NAMES, formatLongDate, formatShortDate, rollingAgendaDays, todayStr, toLocalDateKey } from "../utils";
+import { addDays, dateFromKey, DAY_NAMES, formatLongDate, formatShortDate, rollingAgendaDays, todayStr, toLocalDateKey } from "../utils";
 
 // Today plus the next seven days.
 const AGENDA_DAY_COUNT = 8;
 import { categoryLabel, categoryTone, priorityLabel, priorityTone } from "../lib/ui";
+import { compareTasksByImportance } from "../lib/ranking";
 
 type DailyAgendaViewProps = {
   anchorDate: string;
@@ -56,7 +57,7 @@ export function DailyAgendaView({
       .sort((a, b) => {
         // Date first, because the window spans more than one week now.
         if (a.specificDate !== b.specificDate) return (a.specificDate || "").localeCompare(b.specificDate || "");
-        return compareTasksByPriority(a, b);
+        return compareTasksByImportance(a, b, todayKey);
       })
       .forEach((task) => {
         const key = task.specificDate as string;
@@ -64,7 +65,7 @@ export function DailyAgendaView({
       });
 
     return groups;
-  }, [tasks]);
+  }, [tasks, todayKey]);
 
   const windowTaskCount = useMemo(
     () => agendaDays.reduce((total, day) => total + (tasksByDate.get(day.dateKey) || []).length, 0),

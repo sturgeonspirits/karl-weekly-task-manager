@@ -5,6 +5,7 @@ import { ArchiveView } from "./components/ArchiveView";
 import { CompletedTasksView } from "./components/CompletedTasksView";
 import { DailyAgendaView } from "./components/DailyAgendaView";
 import { DailyBriefCard } from "./components/DailyBriefCard";
+import { DoFirstPanel } from "./components/DoFirstPanel";
 import { GeneralRemindersPanel } from "./components/GeneralRemindersPanel";
 import { StaffSchedulerView } from "./components/StaffSchedulerView";
 import { TaskDialog } from "./components/TaskDialog";
@@ -834,6 +835,13 @@ export default function App() {
       </header>
 
       <main className="app-main mx-auto grid max-w-[1500px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
+        <DoFirstPanel
+          tasks={snapshot.tasks}
+          categories={snapshot.categories}
+          today={todayStr()}
+          onToggleTask={toggleTask}
+          onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
+        />
         <DailyBriefCard brief={brief} today={todayStr()} />
         <div className="app-primary-panel">
           {activeView === "weekly" ? (
