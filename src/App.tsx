@@ -5,6 +5,8 @@ import { ArchiveView } from "./components/ArchiveView";
 import { CompletedTasksView } from "./components/CompletedTasksView";
 import { DailyAgendaView } from "./components/DailyAgendaView";
 import { DailyBriefCard } from "./components/DailyBriefCard";
+import { DoFirstPanel } from "./components/DoFirstPanel";
+import { movedToTopIds } from "./lib/ranking";
 import { GeneralRemindersPanel } from "./components/GeneralRemindersPanel";
 import { StaffSchedulerView } from "./components/StaffSchedulerView";
 import { TaskDialog } from "./components/TaskDialog";
@@ -272,7 +274,13 @@ export default function App() {
     () => scheduledTasks.filter((task) => task.weekId === weekId),
     [scheduledTasks, weekId]
   );
-  const openScheduledTasks = useMemo(() => scheduledTasks.filter((task) => !task.completed), [scheduledTasks]);
+  // Important tasks whose day has passed are shown in the Do first list at the top instead of
+  // on that day (lib/ranking.ts).
+  const movedToTop = useMemo(() => movedToTopIds(snapshot.tasks, todayStr()), [snapshot.tasks]);
+  const openScheduledTasks = useMemo(
+    () => scheduledTasks.filter((task) => !task.completed && !movedToTop.has(task.id)),
+    [scheduledTasks, movedToTop]
+  );
   const generalReminderTasks = useMemo(
     () => snapshot.tasks.filter((task) => task.source !== "staff" && task.isGeneralReminder && !task.deleted && !task.completed),
     [snapshot.tasks]
@@ -834,6 +842,13 @@ export default function App() {
       </header>
 
       <main className="app-main mx-auto grid max-w-[1500px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
+        <DoFirstPanel
+          tasks={snapshot.tasks}
+          categories={snapshot.categories}
+          today={todayStr()}
+          onToggleTask={toggleTask}
+          onEditTask={(task) => setDialog({ open: true, day: task.dayOfWeek, task })}
+        />
         <DailyBriefCard brief={brief} today={todayStr()} />
         <div className="app-primary-panel">
           {activeView === "weekly" ? (
@@ -891,7 +906,7 @@ export default function App() {
           {activeView === "bills" ? <BillsView bills={snapshot.bills} onSaveBills={setBills} /> : null}
 
           {activeView === "transfer" ? (
-            <TransferPanel weekId={weekId} tasks={openScheduledTasks} categories={snapshot.categories} onTransfer={transferTasks} />
+            <TransferPanel weekId={weekId} tasks={scheduledTasks.filter((task) => !task.completed)} categories={snapshot.categories} onTransfer={transferTasks} />
           ) : null}
 
           {activeView === "archive" ? (

@@ -497,6 +497,26 @@
     cursor: pointer;
   }
 
+  /* Do first list: rank number, checkbox, task. Two classes so the phone layout's
+     two-column .agenda-row rule does not override it. */
+  .agenda-row.do-first-row {
+    grid-template-columns: 1.75rem auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .do-first-rank {
+    display: inline-flex;
+    height: 1.75rem;
+    width: 1.75rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: var(--ss-black);
+    color: #ffffff;
+    font-size: 0.8rem;
+    font-weight: 700;
+  }
+
   .agenda-row-clickable:hover {
     border-color: rgba(150, 50, 31, 0.32);
   }

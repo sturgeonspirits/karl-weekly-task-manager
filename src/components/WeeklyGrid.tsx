@@ -12,7 +12,8 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, DailyEvents, StaffMember, Task } from "../types";
-import { addDays, compareTasksByPriority, dateFromKey, DAY_NAMES, formatShortDate, toLocalDateKey, weekIdFromDate } from "../utils";
+import { addDays, dateFromKey, DAY_NAMES, formatShortDate, todayStr, toLocalDateKey, weekIdFromDate } from "../utils";
+import { importanceComparator } from "../lib/ranking";
 import { categoryLabel, categoryMatches, categoryTone, priorityLabel, priorityTone, staffDot } from "../lib/ui";
 
 type WeeklyGridProps = {
@@ -77,7 +78,7 @@ export function WeeklyGrid({
           .toLowerCase()
           .includes(query);
       })
-      .sort(compareTasksByPriority);
+      .sort(importanceComparator(todayStr()));
   }, [categories, categoryFilter, searchTerm, tasks, weekId]);
 
   const staffByName = useMemo(() => new Map(staff.map((person) => [person.name, person])), [staff]);
