@@ -1,7 +1,7 @@
 import { ListOrdered } from "lucide-react";
 import { useMemo } from "react";
 import type { CategoryOption, Task } from "../types";
-import { DO_FIRST_COUNT, rankTasks } from "../lib/ranking";
+import { rankTasks } from "../lib/ranking";
 import { categoryLabel, categoryTone, priorityLabel, priorityTone } from "../lib/ui";
 
 type DoFirstPanelProps = {
@@ -15,6 +15,7 @@ type DoFirstPanelProps = {
 /**
  * The most important open tasks, in order, at the very top of the page. Same ranking as the
  * "Do first" list in the morning brief (see lib/ranking.ts). Ticking one off moves the next up.
+ * Important tasks whose day has passed are listed here (marked Missed) instead of on that day.
  */
 export function DoFirstPanel({ tasks, categories, today, onToggleTask, onEditTask }: DoFirstPanelProps) {
   const { ranked, stale, total } = useMemo(() => rankTasks(tasks, today), [tasks, today]);
@@ -31,12 +32,12 @@ export function DoFirstPanel({ tasks, categories, today, onToggleTask, onEditTas
           <h2 className="page-title">Most important right now</h2>
         </div>
         <span className="stat-pill self-start sm:self-auto">
-          Top {Math.min(DO_FIRST_COUNT, total)} of {total} open
+          {ranked.length} of {total} open
         </span>
       </div>
 
       <ol className="do-first-list mt-4 grid gap-2">
-        {ranked.map(({ task, why }, index) => (
+        {ranked.map(({ task, why, missed }, index) => (
           <li key={task.id} className="agenda-row agenda-row-clickable do-first-row" onClick={() => onEditTask(task)}>
             <span className="do-first-rank" aria-hidden="true">
               {index + 1}
@@ -54,6 +55,7 @@ export function DoFirstPanel({ tasks, categories, today, onToggleTask, onEditTas
             <div className="min-w-0">
               <h4 className="font-semibold text-slate-950 break-words">{task.title}</h4>
               <div className="mt-1 flex flex-wrap items-center gap-2">
+                {missed ? <span className="badge border-[#96321F]/35 bg-[#96321F] text-white">Missed</span> : null}
                 <span className={`badge ${priorityTone(task.priority)}`}>{priorityLabel(task.priority)}</span>
                 <span className="text-sm text-[#7E613F]">{why}</span>
                 <span className={`badge ${categoryTone(task.category, categories)}`}>{categoryLabel(task.category, categories)}</span>
